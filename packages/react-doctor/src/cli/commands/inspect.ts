@@ -27,7 +27,7 @@ import type {
 import type { RequestedScope } from "../utils/resolve-scope.js";
 import { cliLogger as logger } from "../utils/cli-logger.js";
 import { METRIC, STAGED_FILES_TEMP_DIR_PREFIX } from "../utils/constants.js";
-import { recordCount } from "../utils/record-metric.js";
+import { recordCount, recordDistribution } from "../utils/record-metric.js";
 import { getStagedSourceFiles, materializeStagedFiles } from "../utils/get-staged-files.js";
 import type { InspectFlags } from "../utils/inspect-flags.js";
 import { filterDiagnosticsByCategories } from "../utils/filter-diagnostics-by-categories.js";
@@ -263,6 +263,7 @@ export const inspectAction = async (
   const isQuiet = isScoreOnly || isJsonMode;
   const requestedDirectory = path.resolve(directory);
   const startTime = performance.now();
+  let scanStartupSpinner: ReturnType<ReturnType<typeof spinner>["start"]> | null = null;
 
   if (isJsonMode) {
     enableJsonMode({
@@ -475,7 +476,7 @@ export const inspectAction = async (
       skipPrompts,
       userConfig?.projects,
     );
-
+    const projectSelectionCompletedTime = performance.now();
     const changedFilesDiffInfo = flags.changedFilesFrom
       ? buildChangedFilesDiffInfo(readChangedFilesFrom(path.resolve(flags.changedFilesFrom)))
       : null;
@@ -494,6 +495,16 @@ export const inspectAction = async (
     // promotion), so a working-tree scope from a flag, `config.scope` /
     // `config.diff`, or that internal path all satisfy the requirement.
     validateIncludeUntrackedScope(includeUntracked, scopeRequest.scope);
+    scanStartupSpinner = !isQuiet ? spinner("Scanning...").start() : null;
+    if (scanStartupSpinner !== null) {
+      recordDistribution(
+        METRIC.scanFeedbackDelay,
+        performance.now() - projectSelectionCompletedTime,
+        {
+          unit: "millisecond",
+        },
+      );
+    }
     const wantsDiffMode = scopeRequest.scope !== undefined && scopeRequest.scope !== "full";
     // HACK: also call getDiffInfo when we MIGHT prompt the user — without it the
     // "full vs changed" prompt never appears for users on a feature branch who
@@ -506,7 +517,15 @@ export const inspectAction = async (
       (shouldDetectDiff
         ? await getDiffInfo(resolvedDirectory, scopeRequest.base, includeUntracked)
         : null);
-    const scope = await finalizeScope({ requested: scopeRequest, diffInfo, skipPrompts, isQuiet });
+    scanStartupSpinner?.stop();
+    scanStartupSpinner = null;
+    const scope = await finalizeScope({
+      requested: scopeRequest,
+      diffInfo,
+      skipPrompts,
+      isQuiet,
+    });
+    scanStartupSpinner = !isQuiet ? spinner("Scanning...").start() : null;
     const isDiffMode = scope !== "full";
 
     // The commit a baseline / line-range diff compares against. When diffing
@@ -549,6 +568,8 @@ export const inspectAction = async (
             includeUntracked,
           })
         : null;
+    scanStartupSpinner?.stop();
+    scanStartupSpinner = null;
     if (scope === "lines" && changedLineRanges === null && !isQuiet) {
       logger.warn(
         "Could not determine changed lines (no base ref or git diff failed); reporting all issues in changed files.",
@@ -833,6 +854,7 @@ export const inspectAction = async (
       }
     }
   } catch (error) {
+    scanStartupSpinner?.stop();
     // Expected, user-actionable failures — a directory without React, a missing
     // package.json, or a bad `--diff` base branch — are the user's project or
     // input, not a react-doctor bug: skip Sentry and the "open a prefilled
