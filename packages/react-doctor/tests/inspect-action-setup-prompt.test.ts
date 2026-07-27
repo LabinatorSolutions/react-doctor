@@ -10,6 +10,7 @@ import { inspect } from "../src/inspect.js";
 const mockState = vi.hoisted(() => ({
   projectDirectories: new Array<string>(),
   lifecycleEvents: new Array<string>(),
+  redirectedDirectories: new Array<string>(),
 }));
 
 vi.mock("ora", () => ({
@@ -30,13 +31,16 @@ vi.mock("@react-doctor/core", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@react-doctor/core")>();
   return {
     ...actual,
-    resolveScanTarget: vi.fn(async (requestedDirectory: string) => ({
-      resolvedDirectory: requestedDirectory,
-      requestedDirectory,
-      userConfig: null,
-      configSourceDirectory: null,
-      didRedirectViaRootDir: false,
-    })),
+    resolveScanTarget: vi.fn(async (requestedDirectory: string) => {
+      const resolvedDirectory = mockState.redirectedDirectories[0] ?? requestedDirectory;
+      return {
+        resolvedDirectory,
+        requestedDirectory,
+        userConfig: null,
+        configSourceDirectory: null,
+        didRedirectViaRootDir: resolvedDirectory !== requestedDirectory,
+      };
+    }),
     getDiffInfo: vi.fn(async () => {
       mockState.lifecycleEvents.push("diff");
       return {
@@ -142,6 +146,7 @@ describe("inspectAction setup prompt", () => {
     vi.clearAllMocks();
     mockState.projectDirectories.length = 0;
     mockState.lifecycleEvents.length = 0;
+    mockState.redirectedDirectories.length = 0;
     for (const tempDirectory of tempDirectories.splice(0)) {
       fs.rmSync(tempDirectory, { recursive: true, force: true });
     }
@@ -228,6 +233,32 @@ describe("inspectAction setup prompt", () => {
       adminDirectory,
       expect.objectContaining({
         includePaths: ["src/Dashboard.tsx"],
+      }),
+    );
+  });
+
+  it("rebases explicit changed-file paths after a rootDir redirect", async () => {
+    const rootDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "react-doctor-rootdir-"));
+    tempDirectories.push(rootDirectory);
+    const websiteDirectory = path.join(rootDirectory, "apps", "website");
+    writePackageJson(rootDirectory, { name: "monorepo", private: true });
+    writePackageJson(websiteDirectory, { name: "website" });
+    const changedFilesPath = path.join(rootDirectory, "changed-files.txt");
+    fs.writeFileSync(
+      changedFilesPath,
+      ["apps/website/src/App.tsx", "packages/shared/src/index.ts"].join("\n"),
+    );
+
+    mockState.redirectedDirectories = [websiteDirectory];
+    mockState.projectDirectories = [websiteDirectory];
+
+    await inspectAction(rootDirectory, { changedFilesFrom: changedFilesPath, lint: false });
+
+    expect(inspect).toHaveBeenCalledTimes(1);
+    expect(inspect).toHaveBeenCalledWith(
+      websiteDirectory,
+      expect.objectContaining({
+        includePaths: ["src/App.tsx"],
       }),
     );
   });
