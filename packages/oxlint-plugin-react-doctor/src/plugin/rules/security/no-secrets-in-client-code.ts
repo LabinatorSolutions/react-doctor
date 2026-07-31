@@ -17,6 +17,7 @@ import { hasDirective } from "../../utils/has-directive.js";
 import { isInsideServerOnlyScope } from "../../utils/is-inside-server-only-scope.js";
 import { isNodeOfType } from "../../utils/is-node-of-type.js";
 import { isPlaceholderSecretValue } from "../../utils/is-placeholder-secret-value.js";
+import { isStructuredParserSentinelValue } from "../../utils/is-structured-parser-sentinel-value.js";
 import { resolveClientSecretRecommendation } from "../../utils/resolve-client-secret-recommendation.js";
 import type { EsTreeNodeOfType } from "../../utils/es-tree-node-of-type.js";
 
@@ -123,6 +124,7 @@ export const noSecretsInClientCode = defineRule({
           !isPublicUrlValue(literalValue) &&
           !isPlaceholderValueForVariableHeuristic &&
           !isSelfReferentialSentinelValue(variableName, literalValue) &&
+          !isStructuredParserSentinelValue(variableName, literalValue) &&
           !isIdentifierLikeKeyNameValue(literalValue) &&
           literalValue.length > SECRET_MIN_LENGTH_CHARS
         ) {
