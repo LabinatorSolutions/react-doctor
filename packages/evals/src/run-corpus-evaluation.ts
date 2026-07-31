@@ -5,6 +5,7 @@ import { Daytona, DaytonaNotFoundError, Image } from "@daytona/sdk";
 import pLimit from "p-limit";
 
 import { cleanupEvaluationSandboxes } from "./cleanup-evaluation-sandboxes.js";
+import { deleteDaytonaSnapshotBeforeDeadline } from "./utils/delete-daytona-snapshot-before-deadline.js";
 import {
   BUILD_PAIRED_REACT_DOCTOR_COMMANDS,
   BUILD_REACT_DOCTOR_COMMANDS,
@@ -41,6 +42,7 @@ import { groupCorpusRepositories } from "./group-corpus-repositories.js";
 import { loadCorpusRepositories } from "./load-corpus-repositories.js";
 import type { EvaluationOptions } from "./parse-evaluation-arguments.js";
 import { runEvaluationAttempts } from "./run-evaluation-attempts.js";
+import { runMatrixCorpusEvaluation } from "./run-matrix-corpus-evaluation.js";
 import { createPairedNdjsonWriter } from "./utils/create-paired-ndjson-writer.js";
 import { getEvaluationAttemptDeadlineMilliseconds } from "./utils/get-evaluation-attempt-deadline-milliseconds.js";
 import { getEvaluatorSourceHash } from "./utils/get-evaluator-source-hash.js";
@@ -87,6 +89,7 @@ const shouldRunPairedScansInParallel = (options: EvaluationOptions): boolean => 
 };
 
 export const runCorpusEvaluation = async (options: EvaluationOptions): Promise<void> => {
+  if (options.matrix) return runMatrixCorpusEvaluation(options);
   const baselineFileHandle = options.paired
     ? await open(options.paired.baselineOutputPath, "wx", EVALUATION_ARTIFACT_FILE_MODE)
     : undefined;
@@ -114,9 +117,10 @@ export const runCorpusEvaluation = async (options: EvaluationOptions): Promise<v
     );
     const startedAt = globalThis.performance.now();
     const evaluatorSourceHash = getEvaluatorSourceHash();
+    const wholeRunDeadlineMilliseconds =
+      startedAt + options.maxDurationMinutes * MILLISECONDS_PER_MINUTE;
     const evaluationDeadlineMilliseconds =
-      startedAt +
-      (options.maxDurationMinutes - EVALUATION_CLEANUP_RESERVE_MINUTES) * MILLISECONDS_PER_MINUTE;
+      wholeRunDeadlineMilliseconds - EVALUATION_CLEANUP_RESERVE_MINUTES * MILLISECONDS_PER_MINUTE;
     let completedProjects = 0;
     let failedProjects = 0;
     const runPairedScansInParallel = shouldRunPairedScansInParallel(options);
@@ -241,7 +245,12 @@ export const runCorpusEvaluation = async (options: EvaluationOptions): Promise<v
                 }
               : undefined,
           }),
-        beforeRetry: () => cleanupEvaluationSandboxes({ daytona, evaluationId }),
+        beforeRetry: () =>
+          cleanupEvaluationSandboxes({
+            daytona,
+            evaluationId,
+            deadlineMilliseconds: evaluationDeadlineMilliseconds,
+          }),
         onBeforeRetryFailure: (error) => {
           process.stderr.write(
             `Failed to clean up Daytona sandboxes before retry: ${toErrorMessage(error)}\n`,
@@ -262,11 +271,18 @@ export const runCorpusEvaluation = async (options: EvaluationOptions): Promise<v
       });
     } finally {
       try {
-        await cleanupEvaluationSandboxes({ daytona, evaluationId });
+        await cleanupEvaluationSandboxes({
+          daytona,
+          evaluationId,
+          deadlineMilliseconds: wholeRunDeadlineMilliseconds,
+        });
       } finally {
         try {
-          const snapshot = await daytona.snapshot.get(snapshotName);
-          await daytona.snapshot.delete(snapshot);
+          await deleteDaytonaSnapshotBeforeDeadline({
+            snapshotClient: daytona.snapshot,
+            snapshotName,
+            deadlineMilliseconds: wholeRunDeadlineMilliseconds,
+          });
         } catch (error) {
           if (!(error instanceof DaytonaNotFoundError)) {
             process.stderr.write(
