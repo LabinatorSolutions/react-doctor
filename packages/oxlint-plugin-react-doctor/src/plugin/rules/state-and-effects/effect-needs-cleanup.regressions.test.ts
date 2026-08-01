@@ -8772,3 +8772,199 @@ export const Viewport = ({ onWheel }) => {
     expect(result.diagnostics).toHaveLength(0);
   });
 });
+
+describe("effect-needs-cleanup Supabase Realtime patterns (#1539)", () => {
+  it("does not flag Supabase channel with removeChannel cleanup", () => {
+    const result = runRule(
+      effectNeedsCleanup,
+      `import { useEffect } from "react";
+export const SupabaseChannel = ({ supabase, roomId }) => {
+  useEffect(() => {
+    const channel = supabase
+      .channel(\`messages:\${roomId}\`)
+      .on("postgres_changes", { event: "INSERT" }, () => {})
+      .on("postgres_changes", { event: "UPDATE" }, () => {})
+      .subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [roomId, supabase]);
+  return null;
+};`,
+    );
+    expect(result.parseErrors).toEqual([]);
+    expect(result.diagnostics).toHaveLength(0);
+  });
+
+  it("does not flag Supabase channel with removeAllChannels cleanup", () => {
+    const result = runRule(
+      effectNeedsCleanup,
+      `import { useEffect } from "react";
+export const SupabaseChannel = ({ supabase }) => {
+  useEffect(() => {
+    const channel = supabase.channel("test").subscribe();
+    return () => {
+      supabase.removeAllChannels();
+    };
+  }, [supabase]);
+  return null;
+};`,
+    );
+    expect(result.parseErrors).toEqual([]);
+    expect(result.diagnostics).toHaveLength(0);
+  });
+
+  it("does not flag Supabase channel with channel.unsubscribe() cleanup", () => {
+    const result = runRule(
+      effectNeedsCleanup,
+      `import { useEffect } from "react";
+export const SupabaseChannel = ({ supabase, roomId }) => {
+  useEffect(() => {
+    const channel = supabase
+      .channel(\`messages:\${roomId}\`)
+      .on("postgres_changes", { event: "INSERT" }, () => {})
+      .subscribe();
+    return () => {
+      channel.unsubscribe();
+    };
+  }, [roomId, supabase]);
+  return null;
+};`,
+    );
+    expect(result.parseErrors).toEqual([]);
+    expect(result.diagnostics).toHaveLength(0);
+  });
+
+  it("does not flag Supabase channel without .on() using removeChannel", () => {
+    const result = runRule(
+      effectNeedsCleanup,
+      `import { useEffect } from "react";
+export const SupabaseChannel = ({ supabase }) => {
+  useEffect(() => {
+    const channel = supabase.channel("test").subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [supabase]);
+  return null;
+};`,
+    );
+    expect(result.parseErrors).toEqual([]);
+    expect(result.diagnostics).toHaveLength(0);
+  });
+
+  it("does not flag removeChannel cleanup through an immutable channel alias", () => {
+    const result = runRule(
+      effectNeedsCleanup,
+      `import { useEffect } from "react";
+export const SupabaseChannel = ({ supabase }) => {
+  useEffect(() => {
+    const channel = supabase
+      .channel("messages")
+      .on("postgres_changes", { event: "INSERT" }, () => {})
+      .subscribe();
+    const ownedChannel = channel;
+    return () => {
+      supabase.removeChannel(ownedChannel);
+    };
+  }, [supabase]);
+  return null;
+};`,
+    );
+    expect(result.parseErrors).toEqual([]);
+    expect(result.diagnostics).toHaveLength(0);
+  });
+
+  it.each([
+    {
+      name: "different client removeChannel",
+      cleanup: "otherSupabase.removeChannel(channel)",
+    },
+    {
+      name: "different channel removeChannel",
+      cleanup: "supabase.removeChannel(otherChannel)",
+    },
+    {
+      name: "different client removeAllChannels",
+      cleanup: "otherSupabase.removeAllChannels()",
+    },
+  ])("flags a Supabase channel with $name cleanup", ({ cleanup }) => {
+    const result = runRule(
+      effectNeedsCleanup,
+      `import { useEffect } from "react";
+export const SupabaseChannel = ({ supabase, otherSupabase, otherChannel }) => {
+  useEffect(() => {
+    const channel = supabase
+      .channel("messages")
+      .on("postgres_changes", { event: "INSERT" }, () => {})
+      .subscribe();
+    return () => {
+      ${cleanup};
+    };
+  }, [otherChannel, otherSupabase, supabase]);
+  return null;
+};`,
+    );
+    expect(result.parseErrors).toEqual([]);
+    expect(result.diagnostics).toHaveLength(1);
+  });
+
+  it("does not treat unrelated removeAllChannels calls as emitter cleanup", () => {
+    const result = runRule(
+      effectNeedsCleanup,
+      `import { useEffect } from "react";
+export const Listener = ({ emitter, supabase, handler }) => {
+  useEffect(() => {
+    emitter.on("message", handler);
+    return () => {
+      supabase.removeAllChannels();
+    };
+  }, [emitter, handler, supabase]);
+  return null;
+};`,
+    );
+    expect(result.parseErrors).toEqual([]);
+    expect(result.diagnostics).toHaveLength(1);
+  });
+
+  it("flags Supabase channel with no cleanup", () => {
+    const result = runRule(
+      effectNeedsCleanup,
+      `import { useEffect } from "react";
+export const SupabaseChannel = ({ supabase, roomId }) => {
+  useEffect(() => {
+    const channel = supabase
+      .channel(\`messages:\${roomId}\`)
+      .on("postgres_changes", { event: "INSERT" }, () => {})
+      .subscribe();
+  }, [roomId, supabase]);
+  return null;
+};`,
+    );
+    expect(result.parseErrors).toEqual([]);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0].message).toContain("subscription");
+  });
+});
+
+describe("effect-needs-cleanup Jitsi dispose pattern (#1539)", () => {
+  it("does not flag Jitsi API with dispose cleanup", () => {
+    const result = runRule(
+      effectNeedsCleanup,
+      `import { useEffect } from "react";
+export const JitsiMeeting = ({ api }) => {
+  useEffect(() => {
+    api.addListener("videoConferenceJoined", () => {
+      console.log("joined");
+    });
+    return () => {
+      api.dispose();
+    };
+  }, [api]);
+  return null;
+};`,
+    );
+    expect(result.parseErrors).toEqual([]);
+    expect(result.diagnostics).toHaveLength(0);
+  });
+});

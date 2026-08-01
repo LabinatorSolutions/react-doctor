@@ -746,6 +746,56 @@ const getCallRegistrationDetails = (
   };
 };
 
+const resolveChannelClientKey = (
+  callNode: EsTreeNodeOfType<"CallExpression">,
+  context: RuleContext,
+): string | null => {
+  let currentCall: EsTreeNode = callNode;
+  while (isNodeOfType(currentCall, "CallExpression")) {
+    const callee = isNodeOfType(currentCall.callee, "ChainExpression")
+      ? currentCall.callee.expression
+      : currentCall.callee;
+    if (
+      !isNodeOfType(callee, "MemberExpression") ||
+      callee.computed ||
+      !isNodeOfType(callee.property, "Identifier")
+    ) {
+      return null;
+    }
+    if (callee.property.name === "channel") {
+      return resolveResourceIdentityKey(callee.object, context);
+    }
+    currentCall = stripParenExpression(callee.object);
+  }
+  return null;
+};
+
+const findFluentChannelSubscriptionHandleKey = (
+  callNode: EsTreeNodeOfType<"CallExpression">,
+  context: RuleContext,
+): string | null => {
+  let terminalCall = callNode;
+  let terminalRoot = findTransparentExpressionRoot(terminalCall);
+  while (
+    isNodeOfType(terminalRoot.parent, "MemberExpression") &&
+    terminalRoot.parent.object === terminalRoot
+  ) {
+    const memberRoot = findTransparentExpressionRoot(terminalRoot.parent);
+    const outerCall = memberRoot.parent;
+    if (!isNodeOfType(outerCall, "CallExpression") || outerCall.callee !== memberRoot) break;
+    terminalCall = outerCall;
+    terminalRoot = findTransparentExpressionRoot(terminalCall);
+  }
+  if (
+    terminalCall === callNode ||
+    getSubscribeOrObserveMethodName(terminalCall) !== "subscribe" ||
+    resolveChannelClientKey(terminalCall, context) === null
+  ) {
+    return null;
+  }
+  return findAssignedResourceKey(terminalCall, context, true);
+};
+
 const findSubscribeLikeUsages = (
   callback: EsTreeNode,
   context: RuleContext,
@@ -813,7 +863,10 @@ const findSubscribeLikeUsages = (
         kind: "subscribe",
         node: child,
         resourceName: subscribeOrObserveMethodName,
-        handleKey: findAssignedResourceKey(child, context, true),
+        handleKey:
+          (subscribeOrObserveMethodName === "on"
+            ? findFluentChannelSubscriptionHandleKey(child, context)
+            : null) ?? findAssignedResourceKey(child, context, true),
         ...registrationDetails,
       });
     }
@@ -2899,6 +2952,10 @@ const UNIVERSAL_RELEASE_VERB_NAMES: ReadonlySet<string> = new Set([
 ]);
 
 const SOCKET_RELEASE_VERB_NAMES: ReadonlySet<string> = new Set(["close"]);
+const SUPABASE_CHANNEL_RELEASE_VERB_NAMES: ReadonlySet<string> = new Set([
+  "removeChannel",
+  "removeAllChannels",
+]);
 
 const getReleaseVerbName = (node: EsTreeNode): string | null => {
   const callNode = isNodeOfType(node, "ChainExpression") ? node.expression : node;
@@ -2917,6 +2974,7 @@ const getReleaseVerbName = (node: EsTreeNode): string | null => {
     const methodName = callee.property.name;
     return GLOBAL_RELEASE_METHOD_NAMES.has(methodName) ||
       BOUND_RESOURCE_RELEASE_METHOD_NAMES.has(methodName) ||
+      SUPABASE_CHANNEL_RELEASE_VERB_NAMES.has(methodName) ||
       methodName === "on"
       ? methodName
       : null;
@@ -3504,6 +3562,21 @@ const doesReleaseCallMatchUsage = (
       (SOCKET_RELEASE_VERB_NAMES.has(releaseVerbName) ||
         UNIVERSAL_RELEASE_VERB_NAMES.has(releaseVerbName))
     );
+  }
+
+  if (
+    usage.kind === "subscribe" &&
+    isNodeOfType(usage.node, "CallExpression") &&
+    (releaseVerbName === "removeChannel" || releaseVerbName === "removeAllChannels") &&
+    releaseReceiverKey === resolveChannelClientKey(usage.node, context) &&
+    (releaseVerbName === "removeAllChannels" ||
+      doesResourceKeyMatchUsageHandle(
+        resolveExpressionKey(callNode.arguments?.[0], context, new Set(), parameterSubstitutions),
+        usage,
+        context,
+      ))
+  ) {
+    return true;
   }
 
   if (
