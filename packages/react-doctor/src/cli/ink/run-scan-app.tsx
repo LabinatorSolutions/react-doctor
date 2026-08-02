@@ -22,11 +22,13 @@ import type {
 import { createInvocationInspect } from "../../inspect.js";
 import type { ReactDoctorInspectOptions } from "../../inspect.js";
 import { buildNoScoreMessage } from "../utils/build-no-score-message.js";
+import { buildEmptyReportMessage } from "../utils/build-empty-report-message.js";
 import { computeProjectedScore } from "../utils/compute-score-projection.js";
 import { countUniqueScannedFiles } from "../utils/count-unique-scanned-files.js";
 import { discoverWorkspacePackages, selectProjects } from "../utils/select-projects.js";
 import { isCiEnvironment } from "../utils/is-ci-environment.js";
 import { formatElapsedTime } from "../utils/render-diagnostics.js";
+import { pluralize } from "../utils/pluralize.js";
 import { printFooter } from "../utils/render-summary.js";
 import { toForwardSlashes } from "../utils/path-format.js";
 import { detectLaunchableAgents } from "../utils/detect-launchable-agents.js";
@@ -37,19 +39,29 @@ import { hasLintHardFailure } from "../utils/has-lint-hard-failure.js";
 import { setUpGitHubActions } from "../utils/set-up-github-actions.js";
 import { recordCount } from "../utils/record-metric.js";
 import { METRIC } from "../utils/constants.js";
-import type { SurfaceFilterableScan } from "../utils/filter-scans-for-surface.js";
+import {
+  filterScansForSurface,
+  type SurfaceFilterableScan,
+} from "../utils/filter-scans-for-surface.js";
 import { isShareOptedOut } from "../utils/is-share-opted-out.js";
 import { resolveCliInspectOptions } from "../utils/resolve-cli-inspect-options.js";
 import { resolveBlockingLevel } from "../utils/resolve-blocking-level.js";
+import { selectReportDiagnostics } from "../utils/select-report-diagnostics.js";
 import { shouldFailScanGate } from "../utils/should-fail-scan-gate.js";
 import { ProjectSelect } from "./components/project-select.js";
 import { ScanApp } from "./scan-app.js";
 import { progressLayerForStore, reporterLayerForStore } from "./scan-bridge-layers.js";
 import { createScanStore } from "./scan-store.js";
-import type { MultiProjectSummary, ScanReport, TuiHandoffRequest } from "./scan-store.js";
+import type {
+  MultiProjectSummary,
+  ScanReport,
+  ScanStore,
+  TuiHandoffRequest,
+} from "./scan-store.js";
 
 export interface RunScanAppInput {
   readonly directory: string;
+  readonly scanTarget?: ResolvedScanTarget;
   readonly options?: ReactDoctorInspectOptions;
   readonly projectFlag?: string;
   readonly skipPrompts?: boolean;
@@ -71,6 +83,7 @@ interface ResolvedProjectScan {
 interface ScanPresentation {
   readonly isOffline: boolean;
   readonly noScoreMessage: string;
+  readonly shouldRecommendCi: boolean;
 }
 
 const resolveProjectScan = async (
@@ -129,6 +142,9 @@ const resolveScanPresentation = (
       input.share === false ||
       isShareOptedOut(projectScans, input.options?.noScore),
     noScoreMessage: buildNoScoreMessage(isScoreDisabled),
+    shouldRecommendCi:
+      projectScans.length > 1 ||
+      projectScans.some((projectScan) => isCiUnconfigured(projectScan.directory)),
   };
 };
 
@@ -188,10 +204,12 @@ const promptProjectSelection = (
 
 interface ScanReportInput {
   readonly result: InspectResult;
+  readonly diagnostics?: ReadonlyArray<Diagnostic>;
   readonly rootDirectory: string;
   readonly projectedScore: number | null;
   readonly isOffline: boolean;
   readonly noScoreMessage: string;
+  readonly emptyStateMessage: string;
 }
 
 const resolveLintFailureReason = (results: ReadonlyArray<InspectResult>): string | null => {
@@ -204,14 +222,16 @@ const resolveLintFailureReason = (results: ReadonlyArray<InspectResult>): string
 
 const toScanReport = ({
   result,
+  diagnostics,
   rootDirectory,
   projectedScore,
   isOffline,
   noScoreMessage,
+  emptyStateMessage,
 }: ScanReportInput): ScanReport => {
   const lintFailureReason = resolveLintFailureReason([result]);
   return {
-    diagnostics: result.diagnostics,
+    diagnostics: diagnostics ?? result.diagnostics,
     score: result.score,
     projectedScore,
     projectName: result.project.projectName,
@@ -220,22 +240,41 @@ const toScanReport = ({
     elapsedMilliseconds: result.elapsedMilliseconds,
     isOffline,
     noScoreMessage,
+    emptyStateMessage,
+    skippedChecks: result.skippedChecks,
     ...(lintFailureReason ? { lintFailureReason } : {}),
   };
 };
 
-const findLowestScored = (
-  reports: ReadonlyArray<{ score: ScoreResult | null; diagnostics: ReadonlyArray<Diagnostic> }>,
-): { score: ScoreResult; diagnostics: ReadonlyArray<Diagnostic> } | null => {
-  let worst: { score: ScoreResult; diagnostics: ReadonlyArray<Diagnostic> } | null = null;
+interface ScoredDiagnosticReport {
+  readonly score: ScoreResult | null;
+  readonly scoreDiagnostics: ReadonlyArray<Diagnostic>;
+}
+
+interface AvailableScoreReport {
+  readonly score: ScoreResult;
+  readonly scoreDiagnostics: ReadonlyArray<Diagnostic>;
+}
+
+const findLowestScoredReport = (
+  reports: ReadonlyArray<ScoredDiagnosticReport>,
+): AvailableScoreReport | null => {
+  let lowestScoredReport: AvailableScoreReport | null = null;
   for (const report of reports) {
     if (report.score === null) continue;
-    if (worst === null || report.score.score < worst.score.score) {
-      worst = { score: report.score, diagnostics: report.diagnostics };
+    if (lowestScoredReport === null || report.score.score < lowestScoredReport.score.score) {
+      lowestScoredReport = { score: report.score, scoreDiagnostics: report.scoreDiagnostics };
     }
   }
-  return worst;
+  return lowestScoredReport;
 };
+
+const resolveEmptyStateMessage = (input: RunScanAppInput, demotedDiagnosticCount: number): string =>
+  buildEmptyReportMessage({
+    categoryFilters: input.options?.categoryFilters ?? [],
+    demotedDiagnosticCount,
+    outputSurface: input.options?.outputSurface ?? "cli",
+  });
 
 interface ExitFooterInput {
   readonly diagnostics: ReadonlyArray<Diagnostic>;
@@ -248,9 +287,8 @@ interface ExitFooterInput {
 }
 
 const printExitFooter = async (input: ExitFooterInput): Promise<void> => {
-  const fileLabel = input.scannedFileCount === 1 ? "file" : "files";
   process.stdout.write(
-    `${highlighter.success("✔")} Scanned ${input.scannedFileCount} ${fileLabel} in ${formatElapsedTime(input.elapsedMilliseconds)}\n`,
+    `${highlighter.success("✔")} Scanned ${pluralize(input.scannedFileCount, "file")} in ${formatElapsedTime(input.elapsedMilliseconds)}\n`,
   );
   if (input.lintFailureReason !== null) {
     process.stdout.write(`${highlighter.warn("⚠")} Lint did not run: ${input.lintFailureReason}\n`);
@@ -293,32 +331,57 @@ const performCiSetup = async (rootDirectory: string): Promise<void> => {
   });
 };
 
-const mountScanApp = async (rootDirectory: string) => {
+interface PendingTuiActions {
+  shouldSetUpCi: boolean;
+  didQuit: boolean;
+  handoffRequest: TuiHandoffRequest | null;
+}
+
+interface MountedScanApp {
+  readonly store: ScanStore;
+  readonly instance: ReturnType<typeof render>;
+  readonly pendingActions: PendingTuiActions;
+  readonly executePendingActions: () => Promise<void>;
+}
+
+const mountScanApp = async (
+  rootDirectory: string,
+  shouldRecommendCi: boolean,
+): Promise<MountedScanApp> => {
   const store = createScanStore();
   const launchableAgents = await detectLaunchableAgents();
-  const pending: { handoff: TuiHandoffRequest | null; ciSetup: boolean } = {
-    handoff: null,
-    ciSetup: false,
+  const pendingActions: PendingTuiActions = {
+    handoffRequest: null,
+    shouldSetUpCi: false,
+    didQuit: false,
   };
   const instance = render(
     <ScanApp
       store={store}
       launchableAgents={launchableAgents}
       onHandoff={(request) => {
-        pending.handoff = request;
+        pendingActions.handoffRequest = request;
       }}
-      canAddToCi={isCiUnconfigured(rootDirectory)}
+      canAddToCi={shouldRecommendCi}
       onAddToCi={() => {
-        pending.ciSetup = true;
+        pendingActions.shouldSetUpCi = true;
+      }}
+      onQuit={() => {
+        pendingActions.didQuit = true;
       }}
     />,
     { exitOnCtrlC: false },
   );
-  const settle = async (): Promise<void> => {
-    if (pending.ciSetup) await performCiSetup(rootDirectory);
-    if (pending.handoff) await performTuiHandoff(pending.handoff, rootDirectory);
+  const executePendingActions = async (): Promise<void> => {
+    // The user explicitly confirmed CI setup, so honor it even after a quit;
+    // a quit only skips the agent handoff.
+    if (pendingActions.shouldSetUpCi) await performCiSetup(rootDirectory);
+    if (pendingActions.didQuit) return;
+    if (pendingActions.handoffRequest) {
+      await performTuiHandoff(pendingActions.handoffRequest, rootDirectory);
+    }
   };
-  return { store, instance, settle };
+  return { store, instance, pendingActions, executePendingActions };
 };
 
 interface ScanExecutionContext {
@@ -346,7 +409,10 @@ const runMountedScan = async (
   blockingLevel: BlockingLevel,
   executeScan: ExecuteTuiScan,
 ): Promise<RunScanAppResult> => {
-  const { store, instance, settle } = await mountScanApp(rootDirectory);
+  const { store, instance, pendingActions, executePendingActions } = await mountScanApp(
+    rootDirectory,
+    presentation.shouldRecommendCi,
+  );
   const context: ScanExecutionContext = {
     store,
     ...presentation,
@@ -355,16 +421,20 @@ const runMountedScan = async (
   try {
     const completedScan = await executeScan(context);
     await instance.waitUntilExit();
-    await printExitFooter({
-      diagnostics: completedScan.diagnostics,
-      scoreResult: completedScan.scoreResult,
-      projectName: completedScan.projectName,
-      scannedFileCount: completedScan.scannedFileCount,
-      elapsedMilliseconds: completedScan.elapsedMilliseconds,
-      isOffline: context.isOffline,
-      lintFailureReason: resolveLintFailureReason(completedScan.scans.map(({ result }) => result)),
-    });
-    await settle();
+    if (!pendingActions.didQuit) {
+      await printExitFooter({
+        diagnostics: completedScan.diagnostics,
+        scoreResult: completedScan.scoreResult,
+        projectName: completedScan.projectName,
+        scannedFileCount: completedScan.scannedFileCount,
+        elapsedMilliseconds: completedScan.elapsedMilliseconds,
+        isOffline: context.isOffline,
+        lintFailureReason: resolveLintFailureReason(
+          completedScan.scans.map(({ result }) => result),
+        ),
+      });
+    }
+    await executePendingActions();
     return {
       shouldFail: shouldFailScanGate({ scans: completedScan.scans, blockingLevel }),
     };
@@ -394,21 +464,36 @@ const runSingleProjectScan = async (
         progress: progressLayerForStore(context.store),
       },
     });
+    const reportSelection = selectReportDiagnostics({
+      scan: { result, config: projectScan.config },
+      categoryFilters: input.options?.categoryFilters,
+      surface: input.options?.outputSurface,
+    });
+    const scoreDiagnostics = filterScansForSurface(
+      [{ result, config: projectScan.config }],
+      "score",
+    );
     const projectedScore = result.score
-      ? await computeProjectedScore([...result.diagnostics], [...result.diagnostics], result.score)
+      ? await computeProjectedScore(
+          [...reportSelection.diagnostics],
+          scoreDiagnostics,
+          result.score,
+        )
       : null;
     context.store.setReport(
       toScanReport({
         result,
+        diagnostics: reportSelection.diagnostics,
         rootDirectory: projectScan.directory,
         projectedScore,
         isOffline: context.isOffline,
         noScoreMessage: context.noScoreMessage,
+        emptyStateMessage: resolveEmptyStateMessage(input, reportSelection.demotedDiagnosticCount),
       }),
     );
     return {
       scans: [{ result, config: projectScan.config }],
-      diagnostics: result.diagnostics,
+      diagnostics: reportSelection.diagnostics,
       scoreResult: result.score,
       projectName: result.project.projectName,
       scannedFileCount: result.scannedFileCount ?? 0,
@@ -455,21 +540,41 @@ const runMultiProjectScan = async (
       },
     );
 
-    const projects = results.map(({ directory, result }) =>
-      toScanReport({
-        result,
-        rootDirectory: directory,
-        projectedScore: null,
-        isOffline: context.isOffline,
-        noScoreMessage: context.noScoreMessage,
-      }),
-    );
+    const projectEntries = results.map(({ directory, result, config }) => {
+      const reportSelection = selectReportDiagnostics({
+        scan: { result, config },
+        categoryFilters: input.options?.categoryFilters,
+        surface: input.options?.outputSurface,
+      });
+      return {
+        report: toScanReport({
+          result,
+          diagnostics: reportSelection.diagnostics,
+          rootDirectory: directory,
+          projectedScore: null,
+          isOffline: context.isOffline,
+          noScoreMessage: context.noScoreMessage,
+          emptyStateMessage: resolveEmptyStateMessage(
+            input,
+            reportSelection.demotedDiagnosticCount,
+          ),
+        }),
+        score: result.score,
+        scoreDiagnostics: filterScansForSurface([{ result, config }], "score"),
+        demotedDiagnosticCount: reportSelection.demotedDiagnosticCount,
+      };
+    });
+    const projects = projectEntries.map(({ report }) => report);
     const combinedDiagnostics = projects.flatMap((project) =>
       qualifyDiagnosticPaths(project.diagnostics, rootDirectory, project.rootDirectory),
     );
-    const worst = findLowestScored(projects);
-    const projectedScore = worst
-      ? await computeProjectedScore(combinedDiagnostics, [...worst.diagnostics], worst.score)
+    const lowestScoredReport = findLowestScoredReport(projectEntries);
+    const projectedScore = lowestScoredReport
+      ? await computeProjectedScore(
+          combinedDiagnostics,
+          [...lowestScoredReport.scoreDiagnostics],
+          lowestScoredReport.score,
+        )
       : null;
     const scannedFileCount = countUniqueScannedFiles(results.map(({ result }) => result));
     const elapsedMilliseconds = performance.now() - startTime;
@@ -477,7 +582,7 @@ const runMultiProjectScan = async (
 
     const summary: MultiProjectSummary = {
       projects,
-      aggregateScore: worst?.score ?? null,
+      aggregateScore: lowestScoredReport?.score ?? null,
       projectedScore,
       combinedDiagnostics,
       scannedFileCount,
@@ -486,6 +591,13 @@ const runMultiProjectScan = async (
       rootDirectory,
       isOffline: context.isOffline,
       noScoreMessage: context.noScoreMessage,
+      emptyStateMessage: resolveEmptyStateMessage(
+        input,
+        projectEntries.reduce(
+          (total, projectEntry) => total + projectEntry.demotedDiagnosticCount,
+          0,
+        ),
+      ),
       ...(lintFailureReason ? { lintFailureReason } : {}),
     };
     context.store.setSummary(summary);
@@ -501,7 +613,8 @@ const runMultiProjectScan = async (
 };
 
 export const runScanApp = async (input: RunScanAppInput): Promise<RunScanAppResult> => {
-  const scanTarget = await resolveScanTarget(input.directory, { allowAmbiguous: true });
+  const scanTarget =
+    input.scanTarget ?? (await resolveScanTarget(input.directory, { allowAmbiguous: true }));
   const rootDirectory = scanTarget.resolvedDirectory;
   const deadlineEpochMs =
     input.options?.deadlineEpochMs ??

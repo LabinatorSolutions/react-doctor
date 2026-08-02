@@ -14,6 +14,7 @@ export interface ScanAppProps {
   readonly onHandoff?: (request: TuiHandoffRequest) => void;
   readonly canAddToCi?: boolean;
   readonly onAddToCi?: () => void;
+  readonly onQuit?: () => void;
 }
 
 export const ScanApp = ({
@@ -22,10 +23,15 @@ export const ScanApp = ({
   onHandoff,
   canAddToCi,
   onAddToCi,
+  onQuit,
 }: ScanAppProps) => {
   const snapshot = useScanStore(store);
   const { exit } = useApp();
   useExitOnCtrlC();
+  const handleQuit = (): void => {
+    onQuit?.();
+    exit();
+  };
 
   if (snapshot.phase === "summary" && snapshot.summary) {
     return (
@@ -35,7 +41,8 @@ export const ScanApp = ({
         onHandoff={onHandoff}
         canAddToCi={canAddToCi}
         onAddToCi={onAddToCi}
-        onExit={() => exit()}
+        onExit={exit}
+        onQuit={handleQuit}
       />
     );
   }
@@ -48,7 +55,8 @@ export const ScanApp = ({
         onHandoff={onHandoff}
         canAddToCi={canAddToCi}
         onAddToCi={onAddToCi}
-        onExit={() => exit()}
+        onExit={exit}
+        onQuit={handleQuit}
       />
     );
   }

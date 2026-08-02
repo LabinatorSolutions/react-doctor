@@ -24,7 +24,9 @@ export interface ScanReport {
   readonly elapsedMilliseconds: number;
   readonly isOffline: boolean;
   readonly noScoreMessage: string;
+  readonly emptyStateMessage?: string;
   readonly lintFailureReason?: string;
+  readonly skippedChecks?: ReadonlyArray<string>;
 }
 
 export interface MultiProjectSummary {
@@ -38,6 +40,7 @@ export interface MultiProjectSummary {
   readonly rootDirectory: string;
   readonly isOffline: boolean;
   readonly noScoreMessage: string;
+  readonly emptyStateMessage?: string;
   readonly lintFailureReason?: string;
 }
 
