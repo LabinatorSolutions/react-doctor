@@ -25,6 +25,11 @@ const FORBIDDEN_INSTALLED_PACKAGES: readonly string[] = [
   "ini",
   "effect",
   "@effect/platform-node-shared",
+  "ink",
+  "ink-link",
+  "ink-spinner",
+  "react-devtools-core",
+  "react-reconciler",
 ];
 const COMMAND_OUTPUT_MAX_BYTES = 50 * 1024 * 1024;
 
@@ -109,7 +114,15 @@ const main = (): void => {
     fs.mkdirSync(installDirectory);
     fs.writeFileSync(
       path.join(installDirectory, "package.json"),
-      `${JSON.stringify({ name: "react-doctor-packed-cli-smoke", private: true }, null, 2)}\n`,
+      `${JSON.stringify(
+        {
+          name: "react-doctor-packed-cli-smoke",
+          private: true,
+          dependencies: { react: "18.3.1" },
+        },
+        null,
+        2,
+      )}\n`,
     );
 
     // Pack the CLI together with its unbundled workspace dependencies:
@@ -207,6 +220,18 @@ const main = (): void => {
       console.error("stdout:", scanResult.stdout.slice(0, 2_000));
       console.error("cause:", cause);
       process.exit(1);
+    }
+
+    if (process.platform !== "win32") {
+      runCommand({
+        command: "python3",
+        args: [
+          path.join(REPOSITORY_ROOT, "scripts/smoke-tty-prompt.py"),
+          "--cli-binary",
+          binaryPath,
+        ],
+        cwd: installDirectory,
+      });
     }
 
     console.log(
