@@ -26,6 +26,7 @@ import { createInvocationInspect } from "../../inspect.js";
 import type { ReactDoctorInspectOptions } from "../../inspect.js";
 import { buildNoScoreMessage } from "../utils/build-no-score-message.js";
 import { hasIncompleteScoreAnalysis } from "../utils/has-incomplete-score-analysis.js";
+import type { InspectFlags } from "../utils/inspect-flags.js";
 import { registerActiveTuiRenderer } from "../utils/active-tui-renderer.js";
 import { buildEmptyReportMessage } from "../utils/build-empty-report-message.js";
 import { computeProjectedScore } from "../utils/compute-score-projection.js";
@@ -36,7 +37,7 @@ import { discoverWorkspacePackages, selectProjects } from "../utils/select-proje
 import { isCiEnvironment } from "../utils/is-ci-environment.js";
 import { formatElapsedTime } from "../utils/render-diagnostics.js";
 import { pluralize } from "../utils/pluralize.js";
-import { printFooter } from "../utils/render-summary.js";
+import { printDiagnosticsDump, printFooter } from "../utils/render-summary.js";
 import { toForwardSlashes } from "../utils/path-format.js";
 import { detectLaunchableAgents } from "../utils/detect-launchable-agents.js";
 import { CLI_AGENT_BINARIES, launchCliAgent } from "../utils/launch-agent.js";
@@ -55,7 +56,9 @@ import {
 import { isShareOptedOut } from "../utils/is-share-opted-out.js";
 import { resolveCliInspectOptions } from "../utils/resolve-cli-inspect-options.js";
 import { resolveBlockingLevel } from "../utils/resolve-blocking-level.js";
+import { resolveProjectTuiScanScope } from "../utils/resolve-project-tui-scan-scope.js";
 import { resolveProjectScan, type ResolvedProjectScan } from "../utils/resolve-project-scan.js";
+import { resolveTuiScanScope, type TuiScanScopePlan } from "../utils/resolve-tui-scan-scope.js";
 import { selectReportDiagnostics } from "../utils/select-report-diagnostics.js";
 import { shouldFailScanGate } from "../utils/should-fail-scan-gate.js";
 import { ProjectSelect } from "./components/project-select.js";
@@ -71,6 +74,7 @@ import type {
 
 export interface RunScanAppInput {
   readonly directory: string;
+  readonly flags?: InspectFlags;
   readonly scanTarget?: ResolvedScanTarget;
   readonly options?: ReactDoctorInspectOptions;
   readonly projectFlag?: string;
@@ -88,7 +92,9 @@ interface ScanPresentation {
   readonly isOffline: boolean;
   readonly initialProgress: string;
   readonly noScoreMessage: string;
+  readonly outputDirectory?: string;
   readonly shouldRecommendCi: boolean;
+  readonly verbose: boolean;
 }
 
 interface CompletedProjectScanOutcome {
@@ -133,9 +139,11 @@ const resolveScanPresentation = (
       isShareOptedOut(projectScans, input.options?.noScore),
     initialProgress: projectScans.length > 1 ? "Indexing workspace files…" : "Scanning project…",
     noScoreMessage: buildNoScoreMessage({ isScoreDisabled }),
+    outputDirectory: input.options?.outputDirectory,
     shouldRecommendCi:
       projectScans.length > 1 ||
       projectScans.some((projectScan) => isCiUnconfigured(projectScan.directory)),
+    verbose: input.options?.verbose === true,
   };
 };
 
@@ -425,6 +433,7 @@ interface ScanExecutionContext {
 interface CompletedTuiScan {
   readonly scans: ReadonlyArray<SurfaceFilterableScan>;
   readonly diagnostics: ReadonlyArray<Diagnostic>;
+  readonly diagnosticsAreGateExempt?: boolean;
   readonly scoreResult: ScoreResult | null;
   readonly projectName: string;
   readonly scannedFileCount: number;
@@ -459,6 +468,15 @@ const runMountedScan = async (
     mountedRenderer = mountRenderer("report");
     await mountedRenderer.instance.waitUntilExit();
     mountedRenderer.dispose();
+    if (presentation.outputDirectory !== undefined || presentation.verbose) {
+      await Effect.runPromise(
+        printDiagnosticsDump(
+          [...completedScan.diagnostics],
+          presentation.outputDirectory,
+          presentation.verbose,
+        ),
+      );
+    }
     if (!pendingActions.didQuit) {
       await printExitFooter({
         diagnostics: completedScan.diagnostics,
@@ -474,7 +492,11 @@ const runMountedScan = async (
     }
     await executePendingActions();
     return {
-      shouldFail: shouldFailScanGate({ scans: completedScan.scans, blockingLevel }),
+      shouldFail: shouldFailScanGate({
+        scans: completedScan.scans,
+        blockingLevel,
+        diagnosticsAreGateExempt: completedScan.diagnosticsAreGateExempt,
+      }),
     };
   } catch (error) {
     mountedRenderer.dispose();
@@ -486,14 +508,28 @@ const runSingleProjectScan = async (
   rootScanTarget: ResolvedScanTarget,
   projectDirectory: string,
   input: RunScanAppInput,
+  scopePlan: TuiScanScopePlan,
   blockingLevel: BlockingLevel,
   inspectProject: ReturnType<typeof createInvocationInspect>,
 ): Promise<RunScanAppResult> => {
   const projectScan = await resolveProjectScan(rootScanTarget, projectDirectory);
+  const isSupplyChainEnabled =
+    input.options?.supplyChain ?? projectScan.config?.supplyChain?.enabled ?? true;
+  const scopeOptions = resolveProjectTuiScanScope({
+    plan: scopePlan,
+    projectDirectory: projectScan.directory,
+    rootDirectory: rootScanTarget.resolvedDirectory,
+    supplyChainEnabled: isSupplyChainEnabled,
+  });
+  if (scopeOptions === null) {
+    process.stdout.write("No changed source files in the selected project.\n");
+    return { shouldFail: false };
+  }
   const presentation = resolveScanPresentation(input, [projectScan]);
   return runMountedScan(projectScan.directory, presentation, blockingLevel, async (context) => {
     const result = await inspectProject(projectScan.directory, {
       ...resolveTuiInspectOptions(input, projectScan.config),
+      ...scopeOptions,
       isCi: isCiEnvironment(),
       configOverride: projectScan.config,
       configSourceDirectory: projectScan.configSourceDirectory ?? undefined,
@@ -536,6 +572,7 @@ const runSingleProjectScan = async (
     return {
       scans: [{ result, config: projectScan.config }],
       diagnostics: reportSelection.diagnostics,
+      diagnosticsAreGateExempt: scopePlan.baselineIntended && result.baselineDelta === undefined,
       scoreResult: result.score,
       projectName: result.project.projectName,
       scannedFileCount: result.scannedFileCount ?? 0,
@@ -548,31 +585,52 @@ const runMultiProjectScan = async (
   rootScanTarget: ResolvedScanTarget,
   directories: ReadonlyArray<string>,
   input: RunScanAppInput,
+  scopePlan: TuiScanScopePlan,
   blockingLevel: BlockingLevel,
   inspectProject: ReturnType<typeof createInvocationInspect>,
 ): Promise<RunScanAppResult> => {
   const feedbackStartTime = performance.now();
   const rootDirectory = rootScanTarget.resolvedDirectory;
-  const projectScans = deduplicateProjectScans(
+  const discoveredProjectScans = deduplicateProjectScans(
     await mapWithConcurrency(
       [...directories],
       DEFAULT_PROJECT_SCAN_CONCURRENCY,
       (projectDirectory) => resolveProjectScan(rootScanTarget, projectDirectory),
     ),
   );
+  const projectScans = discoveredProjectScans.flatMap((projectScan) => {
+    const isSupplyChainEnabled =
+      input.options?.supplyChain ?? projectScan.config?.supplyChain?.enabled ?? true;
+    const scopeOptions = resolveProjectTuiScanScope({
+      plan: scopePlan,
+      projectDirectory: projectScan.directory,
+      rootDirectory,
+      supplyChainEnabled: isSupplyChainEnabled,
+    });
+    return scopeOptions === null ? [] : [{ projectScan, scopeOptions }];
+  });
+  if (projectScans.length === 0) {
+    process.stdout.write("No changed source files in the selected projects.\n");
+    return { shouldFail: false };
+  }
   const projectCount = projectScans.length;
-  const rootProjectScan = projectScans.find(
+  const rootProjectScan = discoveredProjectScans.find(
     (projectScan) => path.resolve(projectScan.directory) === path.resolve(rootDirectory),
   );
   const workspaceDeadCodeOwner = resolveWorkspaceDeadCodeOwner({
     rootDirectory,
-    projectDirectories: projectScans.map((projectScan) => projectScan.directory),
+    projectDirectories: discoveredProjectScans.map((projectScan) => projectScan.directory),
     isRootDeadCodeEnabled: input.options?.deadCode ?? rootProjectScan?.config?.deadCode ?? true,
   });
   if (workspaceDeadCodeOwner !== null) {
-    recordCount(METRIC.scanWorkspaceDeadCodeShared, 1, { projectCount });
+    recordCount(METRIC.scanWorkspaceDeadCodeShared, 1, {
+      projectCount: discoveredProjectScans.length,
+    });
   }
-  const presentation = resolveScanPresentation(input, projectScans);
+  const presentation = resolveScanPresentation(
+    input,
+    projectScans.map(({ projectScan }) => projectScan),
+  );
   return runMountedScan(rootDirectory, presentation, blockingLevel, async (context) => {
     const startTime = performance.now();
     let finishedCount = 0;
@@ -582,14 +640,17 @@ const runMultiProjectScan = async (
     });
     context.store.setProgress(`Scanning ${projectCount} projects…`);
     await yieldToEventLoop();
-    const precomputedSourceFileCounts = await collectProjectSourceFileCounts(
-      rootDirectory,
-      projectScans.map((projectScan) => projectScan.directory),
-    );
+    const precomputedSourceFileCounts =
+      scopePlan.scope === "full"
+        ? await collectProjectSourceFileCounts(
+            rootDirectory,
+            projectScans.map(({ projectScan }) => projectScan.directory),
+          )
+        : null;
     const scanOutcomes = await mapWithConcurrency(
       projectScans,
       DEFAULT_PROJECT_SCAN_CONCURRENCY,
-      async (projectScan) => {
+      async ({ projectScan, scopeOptions }) => {
         if (
           input.options?.deadlineEpochMs !== undefined &&
           remainingDeadlineBudgetMs(input.options.deadlineEpochMs) === 0
@@ -612,12 +673,13 @@ const runMultiProjectScan = async (
         const ownsWorkspaceDeadCode = projectScan.directory === workspaceDeadCodeOwner;
         const result = await inspectProject(projectScan.directory, {
           ...inspectOptions,
+          ...scopeOptions,
           deadCode:
             workspaceDeadCodeOwner === null ? inspectOptions.deadCode : ownsWorkspaceDeadCode,
           isCi: isCiEnvironment(),
           configOverride: projectScan.config,
           configSourceDirectory: projectScan.configSourceDirectory ?? undefined,
-          precomputedSourceFileCount: precomputedSourceFileCounts.get(projectScan.directory),
+          precomputedSourceFileCount: precomputedSourceFileCounts?.get(projectScan.directory),
           uiLayers: {
             reporter: Reporter.layerNoop,
             progress: progressLayerForStore(context.store, {
@@ -626,7 +688,7 @@ const runMultiProjectScan = async (
             }),
           },
           concurrentScan: true,
-          excludedProjectDirectories: projectScans
+          excludedProjectDirectories: discoveredProjectScans
             .filter((candidateProjectScan) =>
               isPathInsideDirectory(candidateProjectScan.directory, projectScan.directory),
             )
@@ -745,6 +807,11 @@ const runMultiProjectScan = async (
     return {
       scans: results,
       diagnostics: combinedDiagnostics,
+      diagnosticsAreGateExempt:
+        scopePlan.baselineIntended &&
+        (skippedProjects.length > 0 ||
+          results.length === 0 ||
+          results.some(({ result }) => result.baselineDelta === undefined)),
       scoreResult: summary.aggregateScore,
       projectName: summary.projectName,
       scannedFileCount,
@@ -757,6 +824,11 @@ export const runScanApp = async (input: RunScanAppInput): Promise<RunScanAppResu
   const scanTarget =
     input.scanTarget ?? (await resolveScanTarget(input.directory, { allowAmbiguous: true }));
   const rootDirectory = scanTarget.resolvedDirectory;
+  const scopePlan = await resolveTuiScanScope({
+    directory: rootDirectory,
+    flags: input.flags ?? {},
+    userConfig: scanTarget.userConfig,
+  });
   const deadlineEpochMs =
     input.options?.deadlineEpochMs ??
     (input.options?.maxDurationMs != null ? Date.now() + input.options.maxDurationMs : undefined);
@@ -784,6 +856,7 @@ export const runScanApp = async (input: RunScanAppInput): Promise<RunScanAppResu
       scanTarget,
       selectedDirectories[0],
       resolvedInput,
+      scopePlan,
       blockingLevel,
       inspectProject,
     );
@@ -792,6 +865,7 @@ export const runScanApp = async (input: RunScanAppInput): Promise<RunScanAppResu
     scanTarget,
     selectedDirectories,
     resolvedInput,
+    scopePlan,
     blockingLevel,
     inspectProject,
   );
