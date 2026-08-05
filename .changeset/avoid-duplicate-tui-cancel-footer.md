@@ -2,4 +2,4 @@
 "react-doctor": patch
 ---
 
-Prevent Ctrl-C from printing the completed-scan footer after the interactive cancellation footer.
+Keep transient project selection out of terminal history, and preserve final interactive results when Ctrl-C prints the cancellation footer without printing a second completed-scan footer.
