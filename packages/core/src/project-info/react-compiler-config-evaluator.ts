@@ -3,305 +3,14 @@ import { createRequire } from "node:module";
 import * as path from "node:path";
 import { ResolverFactory } from "oxc-resolver";
 import ts from "typescript";
-import {
-  ES2023_YEAR,
-  ES_TARGET_YEAR_BY_NAME,
-  REACT_COMPILER_CONFIG_IMPORT_MAX_DEPTH,
-  TSCONFIG_EXTENDS_MAX_DEPTH,
-} from "../constants.js";
-import type { Framework, PackageJson } from "../types/index.js";
+import { REACT_COMPILER_CONFIG_IMPORT_MAX_DEPTH } from "../constants.js";
+import type { PackageJson } from "../types/index.js";
 import { isProjectBoundary } from "../utils/is-project-boundary.js";
 import { unwrapTypescriptExpression } from "../utils/unwrap-typescript-expression.js";
 import { isFile, isPlainObject } from "./fs-utils.js";
+import { isLocalModuleSpecifier } from "./is-local-module-specifier.js";
+import { NEXT_CONFIG_FILENAMES } from "./detect-nextjs-static-export.js";
 import { readPackageJson } from "./package-json.js";
-
-const TSCONFIG_FILENAME = "tsconfig.json";
-
-interface TsConfigCompilerOptions {
-  readonly target?: string;
-  readonly lib?: readonly string[];
-  readonly hasExplicitLib: boolean;
-}
-
-interface TsConfigShape {
-  readonly extends?: string;
-  readonly referencePaths: readonly string[];
-  readonly compilerOptions: TsConfigCompilerOptions;
-}
-
-const isLocalModuleSpecifier = (moduleSpecifier: string): boolean =>
-  moduleSpecifier === "." ||
-  moduleSpecifier === ".." ||
-  moduleSpecifier.startsWith("./") ||
-  moduleSpecifier.startsWith("../") ||
-  path.isAbsolute(moduleSpecifier);
-
-const ensureJsonExtension = (filePath: string): string =>
-  path.extname(filePath) === "" ? `${filePath}.json` : filePath;
-
-const resolvePackageExtendsPath = (
-  extendsValue: string,
-  fromConfigDirectory: string,
-): string | null => {
-  const requireFromConfig = createRequire(path.join(fromConfigDirectory, "tsconfig.json"));
-  const candidates = [
-    extendsValue,
-    ensureJsonExtension(extendsValue),
-    `${extendsValue.replace(/\/$/, "")}/tsconfig.json`,
-  ];
-
-  for (const candidate of candidates) {
-    try {
-      return requireFromConfig.resolve(candidate);
-    } catch {
-      continue;
-    }
-  }
-
-  return null;
-};
-
-const resolveExtendsPath = (extendsValue: string, fromConfigDirectory: string): string | null => {
-  if (isLocalModuleSpecifier(extendsValue)) {
-    const resolvedPath = path.resolve(fromConfigDirectory, extendsValue);
-    if (isFile(resolvedPath)) return resolvedPath;
-    const directoryConfigPath = path.join(resolvedPath, TSCONFIG_FILENAME);
-    return isFile(directoryConfigPath) ? directoryConfigPath : ensureJsonExtension(resolvedPath);
-  }
-
-  return resolvePackageExtendsPath(extendsValue, fromConfigDirectory);
-};
-
-const normalizeCompilerOptions = (compilerOptions: unknown): TsConfigCompilerOptions => {
-  if (!isPlainObject(compilerOptions)) return { hasExplicitLib: false };
-
-  const target = typeof compilerOptions.target === "string" ? compilerOptions.target : undefined;
-  const hasExplicitLib = Object.hasOwn(compilerOptions, "lib");
-  const lib = Array.isArray(compilerOptions.lib)
-    ? compilerOptions.lib.filter((entry): entry is string => typeof entry === "string")
-    : undefined;
-
-  return { target, lib, hasExplicitLib };
-};
-
-const readTsConfig = (filePath: string): TsConfigShape | null => {
-  let content: string;
-  try {
-    content = fs.readFileSync(filePath, "utf-8");
-  } catch {
-    return null;
-  }
-
-  const parsed = ts.parseConfigFileTextToJson(filePath, content);
-  if (!isPlainObject(parsed.config)) return null;
-
-  return {
-    extends: typeof parsed.config.extends === "string" ? parsed.config.extends : undefined,
-    referencePaths: normalizeReferencePaths(parsed.config.references),
-    compilerOptions: normalizeCompilerOptions(parsed.config.compilerOptions),
-  };
-};
-
-const normalizeReferencePaths = (references: unknown): string[] => {
-  if (!Array.isArray(references)) return [];
-  return references
-    .map((reference) =>
-      isPlainObject(reference) && typeof reference.path === "string" ? reference.path : null,
-    )
-    .filter((referencePath): referencePath is string => referencePath !== null);
-};
-
-const mergeCompilerOptions = (
-  inherited: TsConfigCompilerOptions | null,
-  current: TsConfigCompilerOptions,
-): TsConfigCompilerOptions => {
-  const target = current.target ?? inherited?.target;
-  const hasExplicitLib = current.hasExplicitLib || Boolean(inherited?.hasExplicitLib);
-  const lib = current.hasExplicitLib ? current.lib : inherited?.lib;
-  return { target, lib, hasExplicitLib };
-};
-
-const readResolvedCompilerOptions = (
-  tsConfigPath: string,
-  extendsDepth: number,
-  visitedPaths: ReadonlySet<string>,
-): TsConfigCompilerOptions | null => {
-  let realPath: string;
-  try {
-    realPath = fs.realpathSync.native(tsConfigPath);
-  } catch {
-    return null;
-  }
-  if (visitedPaths.has(realPath)) return null;
-
-  const tsConfig = readTsConfig(realPath);
-  if (!tsConfig) return null;
-
-  const nextVisitedPaths = new Set(visitedPaths);
-  nextVisitedPaths.add(realPath);
-
-  if (tsConfig.extends && extendsDepth < TSCONFIG_EXTENDS_MAX_DEPTH) {
-    const parentPath = resolveExtendsPath(tsConfig.extends, path.dirname(realPath));
-    if (parentPath && isFile(parentPath)) {
-      const inherited = readResolvedCompilerOptions(parentPath, extendsDepth + 1, nextVisitedPaths);
-      return mergeCompilerOptions(inherited, tsConfig.compilerOptions);
-    }
-  }
-
-  return tsConfig.compilerOptions;
-};
-
-const targetYearIsPreES2023 = (target: string): boolean => {
-  const year = ES_TARGET_YEAR_BY_NAME[target.toLowerCase()];
-  return year !== undefined && year < ES2023_YEAR;
-};
-
-const libEntryIncludesES2023Array = (entry: string): boolean => {
-  const normalizedEntry = entry.toLowerCase();
-  if (normalizedEntry === "esnext" || normalizedEntry === "esnext.array") return true;
-  const esYearMatch = /^es(\d{4})(?:\.(.+))?$/.exec(normalizedEntry);
-  if (!esYearMatch) return false;
-
-  const year = Number(esYearMatch[1]);
-  if (year < ES2023_YEAR) return false;
-
-  const component = esYearMatch[2];
-  return component === undefined || component === "array";
-};
-
-const libIncludesES2023 = (lib: ReadonlyArray<string>): boolean =>
-  lib.some(libEntryIncludesES2023Array);
-
-const compilerOptionsArePreES2023 = (compilerOptions: TsConfigCompilerOptions): boolean => {
-  if (compilerOptions.target) {
-    return targetYearIsPreES2023(compilerOptions.target);
-  }
-
-  if (compilerOptions.hasExplicitLib) {
-    return !libIncludesES2023(compilerOptions.lib ?? []);
-  }
-
-  return false;
-};
-
-const compilerOptionsDeclareTargetOrLib = (compilerOptions: TsConfigCompilerOptions): boolean =>
-  compilerOptions.hasExplicitLib || compilerOptions.target !== undefined;
-
-const detectPreES2023FromConfig = (
-  tsConfigPath: string,
-  visitedConfigPaths: ReadonlySet<string> = new Set(),
-): boolean => {
-  if (visitedConfigPaths.has(tsConfigPath)) return false;
-  const compilerOptions = readResolvedCompilerOptions(tsConfigPath, 0, new Set());
-  if (!compilerOptions) return false;
-  if (!compilerOptionsDeclareTargetOrLib(compilerOptions)) {
-    const tsConfig = readTsConfig(tsConfigPath);
-    if (!tsConfig) return false;
-    const nextVisitedConfigPaths = new Set(visitedConfigPaths);
-    nextVisitedConfigPaths.add(tsConfigPath);
-    const configDirectory = path.dirname(tsConfigPath);
-    return tsConfig.referencePaths.some((referencePath) => {
-      const resolvedReferencePath = path.resolve(configDirectory, referencePath);
-      const referencedConfigPath = isFile(resolvedReferencePath)
-        ? resolvedReferencePath
-        : path.join(resolvedReferencePath, TSCONFIG_FILENAME);
-      return (
-        isFile(referencedConfigPath) &&
-        detectPreES2023FromConfig(referencedConfigPath, nextVisitedConfigPaths)
-      );
-    });
-  }
-  return compilerOptionsArePreES2023(compilerOptions);
-};
-
-export const detectPreES2023Target = (directory: string): boolean => {
-  const tsConfigPath = path.join(directory, TSCONFIG_FILENAME);
-  if (isFile(tsConfigPath)) return detectPreES2023FromConfig(tsConfigPath);
-
-  for (const fallbackFilename of FALLBACK_TSCONFIG_FILENAMES) {
-    const fallbackPath = path.join(directory, fallbackFilename);
-    if (isFile(fallbackPath)) return detectPreES2023FromConfig(fallbackPath);
-  }
-
-  return false;
-};
-
-const FALLBACK_TSCONFIG_FILENAMES = ["tsconfig.app.json", "tsconfig.build.json"] as const;
-
-const FRAMEWORK_PACKAGES: Record<string, Framework> = {
-  next: "nextjs",
-  "@tanstack/react-start": "tanstack-start",
-  "@remix-run/react": "remix",
-  gatsby: "gatsby",
-  astro: "astro",
-  vite: "vite",
-  "react-scripts": "cra",
-  expo: "expo",
-  "react-native": "react-native",
-};
-
-const FRAMEWORK_DISPLAY_NAMES: Record<Framework, string> = {
-  nextjs: "Next.js",
-  astro: "Astro",
-  "tanstack-start": "TanStack Start",
-  vite: "Vite",
-  cra: "Create React App",
-  remix: "Remix",
-  gatsby: "Gatsby",
-  expo: "Expo",
-  "react-native": "React Native",
-  preact: "Preact",
-  unknown: "React",
-};
-
-export const formatFrameworkName = (framework: Framework): string =>
-  FRAMEWORK_DISPLAY_NAMES[framework];
-
-// Preact is treated as a framework only when no React-based framework
-// (`next` / `vite` / `react-scripts` / …) AND no `react` itself is
-// present — i.e. a pure-Preact codebase with no bundler manifest react-
-// doctor recognises. Component libraries that list both `react` and
-// `preact` as peer deps stay `unknown`, which is what they were before
-// this branch existed; they still pick up a non-null `preactVersion`
-// (see `discover-project.ts`) so Preact-bucket rules activate without
-// overwriting the framework classification.
-export const detectFramework = (dependencies: Record<string, string>): Framework => {
-  for (const [packageName, frameworkName] of Object.entries(FRAMEWORK_PACKAGES)) {
-    if (dependencies[packageName]) {
-      return frameworkName;
-    }
-  }
-  if (dependencies.preact && !dependencies.react) {
-    return "preact";
-  }
-  return "unknown";
-};
-
-const MOBILE_FRAMEWORKS: ReadonlySet<Framework> = new Set(["expo", "react-native"]);
-
-// The cross-workspace merge tier: a monorepo whose `apps/mobile` is Expo and
-// `apps/web` is Next.js classifies by the WEB framework no matter which
-// workspace the walk visits first — the same web-over-mobile priority
-// `detectFramework` applies within one manifest. Web wins because it's
-// coverage-maximizing: `rn-*` / Expo rules still load via
-// `hasReactNativeWorkspace` / `expoVersion`, while the web framework's rules
-// gate on this classification alone. Within a tier (two web apps, or two
-// mobile apps) the first workspace in walk order keeps the slot; `unknown`
-// never displaces anything.
-export const frameworkMergeRank = (framework: Framework): number => {
-  if (framework === "unknown") return 3;
-  return MOBILE_FRAMEWORKS.has(framework) ? 2 : 1;
-};
-
-const REACT_COMPILER_LINT_PACKAGES = new Set(["eslint-plugin-react-compiler"]);
-const REACT_COMPILER_RUNTIME_PACKAGES = new Set(["react-compiler-runtime"]);
-
-const NEXT_CONFIG_FILENAMES = [
-  "next.config.js",
-  "next.config.mjs",
-  "next.config.ts",
-  "next.config.cjs",
-];
 
 const BABEL_CONFIG_FILENAMES = [
   ".babelrc",
@@ -375,43 +84,6 @@ const REACT_COMPILER_CONFIG_RESOLVER = new ResolverFactory({
   extensions: REACT_COMPILER_CONFIG_SOURCE_EXTENSIONS,
 });
 
-// `output: "export"` (static HTML export) in next.config.*. The leading
-// `(?:^|[^.\w])` boundary keeps it from matching a nested/namespaced key like
-// `experimental.output` or `outputFileTracingRoot`.
-const STATIC_EXPORT_OUTPUT_PATTERN = /(?:^|[^.\w])["']?output["']?\s*:\s*["']export["']/m;
-
-const hasCompilerPackage = (
-  packageJson: PackageJson,
-  compilerPackages: ReadonlySet<string>,
-): boolean => {
-  const allDependencies = {
-    ...packageJson.peerDependencies,
-    ...packageJson.dependencies,
-    ...packageJson.devDependencies,
-  };
-  return Object.keys(allDependencies).some((packageName) => compilerPackages.has(packageName));
-};
-
-const hasCompilerPackageInAncestors = (
-  directory: string,
-  compilerPackages: ReadonlySet<string>,
-): boolean => {
-  if (isProjectBoundary(directory)) return false;
-
-  let ancestorDirectory = path.dirname(directory);
-  while (ancestorDirectory !== path.dirname(ancestorDirectory)) {
-    const ancestorPackagePath = path.join(ancestorDirectory, "package.json");
-    if (isFile(ancestorPackagePath)) {
-      const ancestorPackageJson = readPackageJson(ancestorPackagePath);
-      if (hasCompilerPackage(ancestorPackageJson, compilerPackages)) return true;
-    }
-    if (isProjectBoundary(ancestorDirectory)) return false;
-    ancestorDirectory = path.dirname(ancestorDirectory);
-  }
-
-  return false;
-};
-
 const resolveImportedConfigFile = (
   fromFilePath: string,
   moduleSpecifier: string,
@@ -463,6 +135,15 @@ const getStaticPropertyName = (propertyName: ts.PropertyName): string | null =>
     ? propertyName.text
     : ts.isComputedPropertyName(propertyName) && ts.isStringLiteralLike(propertyName.expression)
       ? propertyName.expression.text
+      : null;
+
+const getAccessedPropertyName = (
+  expression: ts.PropertyAccessExpression | ts.ElementAccessExpression,
+): string | null =>
+  ts.isPropertyAccessExpression(expression)
+    ? expression.name.text
+    : expression.argumentExpression && ts.isStringLiteralLike(expression.argumentExpression)
+      ? expression.argumentExpression.text
       : null;
 
 const isCommonJsConfigExportAssignment = (
@@ -527,6 +208,11 @@ interface AnalyzeImportedConfigOptions {
 interface ScopedConfigBinding {
   readonly wasFound: boolean;
   readonly initializer: ts.Expression | null;
+}
+
+interface CommonJsConfigExportMatch {
+  readonly node: ts.Node;
+  readonly strategy: "source-order" | "append-mutation" | "replace-mutation";
 }
 
 const bindingNameContainsIdentifier = (
@@ -745,15 +431,24 @@ const isConstantVariableInitializer = (node: ts.Node): node is ts.Expression =>
   ts.isVariableDeclarationList(node.parent.parent) &&
   Boolean(node.parent.parent.flags & ts.NodeFlags.Const);
 
+type TransparentConfigExpression =
+  | ts.ParenthesizedExpression
+  | ts.AsExpression
+  | ts.TypeAssertion
+  | ts.SatisfiesExpression
+  | ts.NonNullExpression
+  | ts.AwaitExpression;
+
+const isTransparentConfigExpression = (node: ts.Node): node is TransparentConfigExpression =>
+  ts.isParenthesizedExpression(node) ||
+  ts.isAsExpression(node) ||
+  ts.isTypeAssertionExpression(node) ||
+  ts.isSatisfiesExpression(node) ||
+  ts.isNonNullExpression(node) ||
+  ts.isAwaitExpression(node);
+
 const isNodeCreateRequireCall = (node: ts.Node, analysis: ConfigExpressionAnalysis): boolean => {
-  if (
-    ts.isParenthesizedExpression(node) ||
-    ts.isAsExpression(node) ||
-    ts.isTypeAssertionExpression(node) ||
-    ts.isSatisfiesExpression(node) ||
-    ts.isNonNullExpression(node) ||
-    ts.isAwaitExpression(node)
-  ) {
+  if (isTransparentConfigExpression(node)) {
     return isNodeCreateRequireCall(node.expression, analysis);
   }
   if (!ts.isCallExpression(node)) return false;
@@ -772,11 +467,7 @@ const isNodeCreateRequireCall = (node: ts.Node, analysis: ConfigExpressionAnalys
   if (!ts.isPropertyAccessExpression(target) && !ts.isElementAccessExpression(target)) {
     return false;
   }
-  const propertyName = ts.isPropertyAccessExpression(target)
-    ? target.name.text
-    : target.argumentExpression && ts.isStringLiteralLike(target.argumentExpression)
-      ? target.argumentExpression.text
-      : null;
+  const propertyName = getAccessedPropertyName(target);
   if (propertyName !== "createRequire") return false;
   const createRequireReceiver = target.expression;
   if (ts.isCallExpression(createRequireReceiver)) {
@@ -808,6 +499,33 @@ const isNodeCreateRequireCall = (node: ts.Node, analysis: ConfigExpressionAnalys
   );
 };
 
+const isUnshadowedGlobalRequireIdentifier = (
+  identifier: ts.Identifier,
+  analysis: ConfigExpressionAnalysis,
+): boolean =>
+  identifier.text === "require" &&
+  !hasTopLevelValueBinding(analysis.sourceFile, identifier.text) &&
+  getImportBinding(analysis.sourceFile, identifier.text) === null;
+
+const isNodeRequireResolverIdentifier = (
+  identifier: ts.Identifier,
+  analysis: ConfigExpressionAnalysis,
+): boolean => {
+  if (analysis.localBindings.has(identifier.text)) return false;
+  const scopedBinding = getScopedConfigBinding(identifier);
+  const resolverInitializer = scopedBinding.wasFound
+    ? scopedBinding.initializer
+    : getTopLevelBinding(analysis.sourceFile, identifier.text);
+  if (!scopedBinding.wasFound && resolverInitializer === null) {
+    return isUnshadowedGlobalRequireIdentifier(identifier, analysis);
+  }
+  return Boolean(
+    resolverInitializer &&
+    isConstantVariableInitializer(resolverInitializer) &&
+    isNodeCreateRequireCall(resolverInitializer, analysis),
+  );
+};
+
 const getNodeRequireResolveModuleSpecifier = (
   callExpression: ts.CallExpression,
   analysis: ConfigExpressionAnalysis,
@@ -816,39 +534,13 @@ const getNodeRequireResolveModuleSpecifier = (
   if (!moduleSpecifierNode || !ts.isStringLiteralLike(moduleSpecifierNode)) return null;
   const target = callExpression.expression;
   if (!ts.isPropertyAccessExpression(target) && !ts.isElementAccessExpression(target)) return null;
-  const propertyName = ts.isPropertyAccessExpression(target)
-    ? target.name.text
-    : target.argumentExpression && ts.isStringLiteralLike(target.argumentExpression)
-      ? target.argumentExpression.text
-      : null;
+  const propertyName = getAccessedPropertyName(target);
   if (propertyName !== "resolve") return null;
   if (isNodeCreateRequireCall(target.expression, analysis)) return moduleSpecifierNode.text;
   if (!ts.isIdentifier(target.expression)) return null;
-
-  const resolverIdentifier = target.expression;
-  if (analysis.localBindings.has(resolverIdentifier.text)) return null;
-  const scopedBinding = getScopedConfigBinding(resolverIdentifier);
-  const topLevelBinding = scopedBinding.wasFound
-    ? null
-    : getTopLevelBinding(analysis.sourceFile, resolverIdentifier.text);
-  const resolverInitializer = scopedBinding.wasFound ? scopedBinding.initializer : topLevelBinding;
-  if (
-    resolverInitializer === null &&
-    !scopedBinding.wasFound &&
-    resolverIdentifier.text === "require" &&
-    !hasTopLevelValueBinding(analysis.sourceFile, resolverIdentifier.text) &&
-    getImportBinding(analysis.sourceFile, resolverIdentifier.text) === null
-  ) {
-    return moduleSpecifierNode.text;
-  }
-  if (
-    !resolverInitializer ||
-    !isConstantVariableInitializer(resolverInitializer) ||
-    !isNodeCreateRequireCall(resolverInitializer, analysis)
-  ) {
-    return null;
-  }
-  return moduleSpecifierNode.text;
+  return isNodeRequireResolverIdentifier(target.expression, analysis)
+    ? moduleSpecifierNode.text
+    : null;
 };
 
 interface ReactCompilerFlagState {
@@ -1125,77 +817,103 @@ const getReactCompilerFlagState = (
   return null;
 };
 
+const getSelectedIdentifierObjectProperty = (
+  identifier: ts.Identifier,
+  propertyName: string,
+  analysis: ConfigExpressionAnalysis,
+  visitedExpressions: Set<ts.Expression>,
+): ConfigPropertyReference | null => {
+  if (analysis.localBindings.has(identifier.text)) {
+    const localReference = analysis.localBindings.get(identifier.text);
+    return localReference?.expression
+      ? getSelectedObjectProperty(
+          localReference.expression,
+          propertyName,
+          localReference.analysis,
+          visitedExpressions,
+        )
+      : null;
+  }
+  const scopedBinding = getScopedConfigBinding(identifier);
+  if (scopedBinding.wasFound) {
+    return scopedBinding.initializer
+      ? getSelectedObjectProperty(
+          scopedBinding.initializer,
+          propertyName,
+          analysis,
+          visitedExpressions,
+        )
+      : null;
+  }
+  const topLevelBinding = getTopLevelBinding(analysis.sourceFile, identifier.text);
+  return topLevelBinding && ts.isExpression(topLevelBinding)
+    ? getSelectedObjectProperty(topLevelBinding, propertyName, analysis, visitedExpressions)
+    : null;
+};
+
+const getDirectObjectPropertyReference = (
+  property: ts.ObjectLiteralElementLike,
+  propertyName: string,
+  analysis: ConfigExpressionAnalysis,
+): ConfigPropertyReference | null => {
+  if (ts.isPropertyAssignment(property) && getStaticPropertyName(property.name) === propertyName) {
+    return { node: property.initializer, analysis };
+  }
+  if (ts.isMethodDeclaration(property) && getStaticPropertyName(property.name) === propertyName) {
+    return { node: property, analysis };
+  }
+  if (ts.isShorthandPropertyAssignment(property) && property.name.text === propertyName) {
+    return { node: property.name, analysis };
+  }
+  return null;
+};
+
+const getSelectedObjectLiteralProperty = (
+  objectLiteral: ts.ObjectLiteralExpression,
+  propertyName: string,
+  analysis: ConfigExpressionAnalysis,
+  visitedExpressions: Set<ts.Expression>,
+): ConfigPropertyReference | null => {
+  for (const property of [...objectLiteral.properties].reverse()) {
+    const directProperty = getDirectObjectPropertyReference(property, propertyName, analysis);
+    if (directProperty) return directProperty;
+    if (!ts.isSpreadAssignment(property)) continue;
+    const spreadProperty = getSelectedObjectProperty(
+      property.expression,
+      propertyName,
+      analysis,
+      visitedExpressions,
+    );
+    if (spreadProperty) return spreadProperty;
+  }
+  return null;
+};
+
 const getSelectedObjectProperty = (
   expression: ts.Expression,
   propertyName: string,
   analysis: ConfigExpressionAnalysis,
   visitedExpressions: Set<ts.Expression> = new Set(),
 ): ConfigPropertyReference | null => {
-  let resolvedExpression = expression;
-  while (
-    ts.isParenthesizedExpression(resolvedExpression) ||
-    ts.isAsExpression(resolvedExpression) ||
-    ts.isTypeAssertionExpression(resolvedExpression) ||
-    ts.isSatisfiesExpression(resolvedExpression) ||
-    ts.isNonNullExpression(resolvedExpression)
-  ) {
-    resolvedExpression = resolvedExpression.expression;
-  }
+  const resolvedExpression = unwrapTypescriptExpression(expression);
   if (visitedExpressions.has(resolvedExpression)) return null;
   visitedExpressions.add(resolvedExpression);
   if (ts.isIdentifier(resolvedExpression)) {
-    if (analysis.localBindings.has(resolvedExpression.text)) {
-      const localReference = analysis.localBindings.get(resolvedExpression.text);
-      return localReference?.expression
-        ? getSelectedObjectProperty(
-            localReference.expression,
-            propertyName,
-            localReference.analysis,
-            visitedExpressions,
-          )
-        : null;
-    }
-    const scopedBinding = getScopedConfigBinding(resolvedExpression);
-    if (scopedBinding.wasFound) {
-      return scopedBinding.initializer
-        ? getSelectedObjectProperty(
-            scopedBinding.initializer,
-            propertyName,
-            analysis,
-            visitedExpressions,
-          )
-        : null;
-    }
-    const topLevelBinding = getTopLevelBinding(analysis.sourceFile, resolvedExpression.text);
-    return topLevelBinding && ts.isExpression(topLevelBinding)
-      ? getSelectedObjectProperty(topLevelBinding, propertyName, analysis, visitedExpressions)
-      : null;
+    return getSelectedIdentifierObjectProperty(
+      resolvedExpression,
+      propertyName,
+      analysis,
+      visitedExpressions,
+    );
   }
-  if (!ts.isObjectLiteralExpression(resolvedExpression)) return null;
-  for (const property of [...resolvedExpression.properties].reverse()) {
-    if (
-      ts.isPropertyAssignment(property) &&
-      getStaticPropertyName(property.name) === propertyName
-    ) {
-      return { node: property.initializer, analysis };
-    }
-    if (ts.isMethodDeclaration(property) && getStaticPropertyName(property.name) === propertyName) {
-      return { node: property, analysis };
-    }
-    if (ts.isShorthandPropertyAssignment(property) && property.name.text === propertyName) {
-      return { node: property.name, analysis };
-    }
-    if (ts.isSpreadAssignment(property)) {
-      const spreadProperty = getSelectedObjectProperty(
-        property.expression,
+  return ts.isObjectLiteralExpression(resolvedExpression)
+    ? getSelectedObjectLiteralProperty(
+        resolvedExpression,
         propertyName,
         analysis,
         visitedExpressions,
-      );
-      if (spreadProperty) return spreadProperty;
-    }
-  }
-  return null;
+      )
+    : null;
 };
 
 const configExpressionMayDefineProperty = (
@@ -1204,16 +922,7 @@ const configExpressionMayDefineProperty = (
   analysis: ConfigExpressionAnalysis,
   visitedExpressions: ReadonlySet<ts.Expression> = new Set(),
 ): boolean => {
-  let resolvedExpression = expression;
-  while (
-    ts.isParenthesizedExpression(resolvedExpression) ||
-    ts.isAsExpression(resolvedExpression) ||
-    ts.isTypeAssertionExpression(resolvedExpression) ||
-    ts.isSatisfiesExpression(resolvedExpression) ||
-    ts.isNonNullExpression(resolvedExpression)
-  ) {
-    resolvedExpression = resolvedExpression.expression;
-  }
+  const resolvedExpression = unwrapTypescriptExpression(expression);
   if (visitedExpressions.has(resolvedExpression)) return true;
   const nextVisitedExpressions = new Set(visitedExpressions);
   nextVisitedExpressions.add(resolvedExpression);
@@ -1306,9 +1015,153 @@ const configExpressionMayDefineProperty = (
   });
 };
 
-const getExportedConfigNodes = (sourceFile: ts.SourceFile, exportName: string): ts.Node[] => {
+const getNamedObjectLiteralExportNode = (
+  objectLiteral: ts.ObjectLiteralExpression,
+  exportName: string,
+): ts.Node | null => {
+  for (const property of [...objectLiteral.properties].reverse()) {
+    if (ts.isPropertyAssignment(property) && getStaticPropertyName(property.name) === exportName) {
+      return property.initializer;
+    }
+    if (ts.isShorthandPropertyAssignment(property) && property.name.text === exportName) {
+      return property.name;
+    }
+  }
+  return null;
+};
+
+const getCommonJsRootConfigExportMatch = (
+  assignment: ts.BinaryExpression,
+  sourceFile: ts.SourceFile,
+  exportName: string,
+): CommonJsConfigExportMatch | null => {
+  if (!isCommonJsConfigExportAssignment(assignment, sourceFile)) return null;
+  if (exportName === "default") {
+    return {
+      node: assignment.right,
+      strategy: "replace-mutation",
+    };
+  }
+  if (!ts.isObjectLiteralExpression(assignment.right)) return null;
+  const exportedNode = getNamedObjectLiteralExportNode(assignment.right, exportName);
+  return exportedNode ? { node: exportedNode, strategy: "source-order" } : null;
+};
+
+const getCommonJsPropertyConfigExportMatch = (
+  assignment: ts.BinaryExpression,
+  sourceFile: ts.SourceFile,
+  exportName: string,
+): CommonJsConfigExportMatch | null => {
+  if (assignment.left.getText(sourceFile) === `exports.${exportName}`) {
+    return {
+      node: assignment.right,
+      strategy: "source-order",
+    };
+  }
+  if (
+    exportName !== "default" ||
+    (!ts.isPropertyAccessExpression(assignment.left) &&
+      !ts.isElementAccessExpression(assignment.left))
+  ) {
+    return null;
+  }
+
+  const assignmentObjectText = assignment.left.expression.getText(sourceFile);
+  const assignmentPropertyName = getAccessedPropertyName(assignment.left);
+  if (
+    !assignmentPropertyName ||
+    (assignmentObjectText !== "module.exports" &&
+      assignmentObjectText !== "exports" &&
+      assignmentObjectText !== "exports.default")
+  ) {
+    return null;
+  }
+  return {
+    node: assignment,
+    strategy: "append-mutation",
+  };
+};
+
+const getCommonJsConfigExportMatch = (
+  statement: ts.Statement,
+  sourceFile: ts.SourceFile,
+  exportName: string,
+): CommonJsConfigExportMatch | null => {
+  if (
+    !ts.isExpressionStatement(statement) ||
+    !ts.isBinaryExpression(statement.expression) ||
+    statement.expression.operatorToken.kind !== ts.SyntaxKind.EqualsToken
+  ) {
+    return null;
+  }
+  return (
+    getCommonJsRootConfigExportMatch(statement.expression, sourceFile, exportName) ??
+    getCommonJsPropertyConfigExportMatch(statement.expression, sourceFile, exportName)
+  );
+};
+
+const getExportedVariableInitializerNodes = (
+  statement: ts.Statement,
+  exportName: string,
+): ts.Expression[] => {
+  if (!ts.isVariableStatement(statement) || !hasExportModifier(statement)) return [];
+  const exportedNodes: ts.Expression[] = [];
+  for (const declaration of statement.declarationList.declarations) {
+    if (
+      ts.isIdentifier(declaration.name) &&
+      declaration.name.text === exportName &&
+      declaration.initializer
+    ) {
+      exportedNodes.push(declaration.initializer);
+    }
+  }
+  return exportedNodes;
+};
+
+const getLocalNamedExportNodes = (statement: ts.Statement, exportName: string): ts.Node[] => {
+  if (
+    !ts.isExportDeclaration(statement) ||
+    statement.moduleSpecifier ||
+    !statement.exportClause ||
+    !ts.isNamedExports(statement.exportClause)
+  ) {
+    return [];
+  }
   const exportedNodes: ts.Node[] = [];
-  const commonJsExportedNodes: ts.Node[] = [];
+  for (const exportSpecifier of statement.exportClause.elements) {
+    if (exportSpecifier.name.text === exportName) {
+      exportedNodes.push(exportSpecifier.propertyName ?? exportSpecifier.name);
+    }
+  }
+  return exportedNodes;
+};
+
+const getDefaultEsmConfigExportNodes = (statement: ts.Statement, exportName: string): ts.Node[] => {
+  if (exportName !== "default") return [];
+  if (ts.isExportAssignment(statement)) return [statement.expression];
+  if (!ts.isFunctionDeclaration(statement) && !ts.isClassDeclaration(statement)) return [];
+  if (!hasExportModifier(statement)) return [];
+  const isDefaultExport = ts
+    .getModifiers(statement)
+    ?.some((modifier) => modifier.kind === ts.SyntaxKind.DefaultKeyword);
+  return isDefaultExport ? [statement] : [];
+};
+
+const getEsmConfigExportNodes = (statement: ts.Statement, exportName: string): ts.Node[] => {
+  const exportedNodes = getDefaultEsmConfigExportNodes(statement, exportName);
+  exportedNodes.push(...getExportedVariableInitializerNodes(statement, exportName));
+  if (
+    ts.isFunctionDeclaration(statement) &&
+    hasExportModifier(statement) &&
+    statement.name?.text === exportName
+  ) {
+    exportedNodes.push(statement);
+  }
+  exportedNodes.push(...getLocalNamedExportNodes(statement, exportName));
+  return exportedNodes;
+};
+
+const getExportedConfigNodes = (sourceFile: ts.SourceFile, exportName: string): ts.Node[] => {
   const isJsonConfig =
     sourceFile.fileName.endsWith(".json") || path.basename(sourceFile.fileName) === ".babelrc";
   if (isJsonConfig && exportName === "default") {
@@ -1317,110 +1170,20 @@ const getExportedConfigNodes = (sourceFile: ts.SourceFile, exportName: string): 
     );
   }
 
+  const exportedNodes: ts.Node[] = [];
+  const commonJsExportedNodes: ts.Node[] = [];
   for (const statement of sourceFile.statements) {
-    if (exportName === "default" && ts.isExportAssignment(statement)) {
-      exportedNodes.push(statement.expression);
-    }
-    if (
-      exportName === "default" &&
-      (ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) &&
-      hasExportModifier(statement) &&
-      ts.getModifiers(statement)?.some((modifier) => modifier.kind === ts.SyntaxKind.DefaultKeyword)
-    ) {
-      exportedNodes.push(statement);
-    }
-    if (
-      ts.isExpressionStatement(statement) &&
-      isCommonJsConfigExportAssignment(statement.expression, sourceFile) &&
-      exportName === "default"
-    ) {
-      commonJsExportedNodes.length = 0;
-      commonJsExportedNodes.push(statement.expression.right);
+    exportedNodes.push(...getEsmConfigExportNodes(statement, exportName));
+    const commonJsExportMatch = getCommonJsConfigExportMatch(statement, sourceFile, exportName);
+    if (!commonJsExportMatch) continue;
+    if (commonJsExportMatch.strategy === "source-order") {
+      exportedNodes.push(commonJsExportMatch.node);
       continue;
     }
-    if (
-      ts.isExpressionStatement(statement) &&
-      isCommonJsConfigExportAssignment(statement.expression, sourceFile) &&
-      exportName !== "default" &&
-      ts.isObjectLiteralExpression(statement.expression.right)
-    ) {
-      for (const property of [...statement.expression.right.properties].reverse()) {
-        if (
-          ts.isPropertyAssignment(property) &&
-          getStaticPropertyName(property.name) === exportName
-        ) {
-          exportedNodes.push(property.initializer);
-          break;
-        }
-        if (ts.isShorthandPropertyAssignment(property) && property.name.text === exportName) {
-          exportedNodes.push(property.name);
-          break;
-        }
-      }
+    if (commonJsExportMatch.strategy === "replace-mutation") {
+      commonJsExportedNodes.length = 0;
     }
-    if (
-      ts.isExpressionStatement(statement) &&
-      ts.isBinaryExpression(statement.expression) &&
-      statement.expression.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
-      statement.expression.left.getText(sourceFile) === `exports.${exportName}`
-    ) {
-      exportedNodes.push(statement.expression.right);
-    }
-    if (
-      exportName === "default" &&
-      ts.isExpressionStatement(statement) &&
-      ts.isBinaryExpression(statement.expression) &&
-      statement.expression.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
-      (ts.isPropertyAccessExpression(statement.expression.left) ||
-        ts.isElementAccessExpression(statement.expression.left))
-    ) {
-      const assignmentTarget = statement.expression.left;
-      const assignmentObjectText = assignmentTarget.expression.getText(sourceFile);
-      const assignmentPropertyName = ts.isPropertyAccessExpression(assignmentTarget)
-        ? assignmentTarget.name.text
-        : assignmentTarget.argumentExpression &&
-            ts.isStringLiteralLike(assignmentTarget.argumentExpression)
-          ? assignmentTarget.argumentExpression.text
-          : null;
-      if (
-        assignmentPropertyName &&
-        (assignmentObjectText === "module.exports" ||
-          assignmentObjectText === "exports" ||
-          assignmentObjectText === "exports.default")
-      ) {
-        commonJsExportedNodes.push(statement.expression);
-        continue;
-      }
-    }
-    if (ts.isVariableStatement(statement) && hasExportModifier(statement)) {
-      for (const declaration of statement.declarationList.declarations) {
-        if (
-          ts.isIdentifier(declaration.name) &&
-          declaration.name.text === exportName &&
-          declaration.initializer
-        ) {
-          exportedNodes.push(declaration.initializer);
-        }
-      }
-    }
-    if (
-      ts.isFunctionDeclaration(statement) &&
-      hasExportModifier(statement) &&
-      statement.name?.text === exportName
-    ) {
-      exportedNodes.push(statement);
-    }
-    if (
-      ts.isExportDeclaration(statement) &&
-      !statement.moduleSpecifier &&
-      statement.exportClause &&
-      ts.isNamedExports(statement.exportClause)
-    ) {
-      for (const exportSpecifier of statement.exportClause.elements) {
-        if (exportSpecifier.name.text === exportName)
-          exportedNodes.push(exportSpecifier.propertyName ?? exportSpecifier.name);
-      }
-    }
+    commonJsExportedNodes.push(commonJsExportMatch.node);
   }
   return [...exportedNodes, ...commonJsExportedNodes];
 };
@@ -1762,11 +1525,7 @@ const analyzeConfigCallTarget = (
     return null;
   }
   if (!ts.isPropertyAccessExpression(target) && !ts.isElementAccessExpression(target)) return null;
-  const propertyName = ts.isPropertyAccessExpression(target)
-    ? target.name.text
-    : target.argumentExpression && ts.isStringLiteralLike(target.argumentExpression)
-      ? target.argumentExpression.text
-      : null;
+  const propertyName = getAccessedPropertyName(target);
   if (propertyName === null) return null;
 
   const requiredModuleSpecifier = getRequireModuleSpecifier(target.expression);
@@ -1837,6 +1596,46 @@ const analyzeConfigCallTarget = (
     : analyzeConfigNode(selectedProperty.node, selectedProperty.analysis, allowCompilerTransform);
 };
 
+const analyzeConfigMemberAccess = (
+  expression: ts.Expression,
+  propertyName: string,
+  analysis: ConfigExpressionAnalysis,
+  allowCompilerTransform: boolean,
+): boolean => {
+  if (!ts.isIdentifier(expression)) {
+    return analyzeConfigNode(expression, analysis, allowCompilerTransform);
+  }
+  if (analysis.localBindings.has(expression.text) || getScopedConfigBinding(expression).wasFound) {
+    const selectedProperty = getSelectedObjectProperty(expression, propertyName, analysis);
+    return Boolean(
+      selectedProperty &&
+      analyzeConfigNode(selectedProperty.node, selectedProperty.analysis, allowCompilerTransform),
+    );
+  }
+  const importBinding = getImportBinding(analysis.sourceFile, expression.text);
+  if (importBinding?.isNamespace) {
+    if (
+      allowCompilerTransform &&
+      isCompilerTransformModule(importBinding.moduleSpecifier, propertyName)
+    ) {
+      return true;
+    }
+    return Boolean(
+      analyzeImportedConfig({
+        analysis,
+        moduleSpecifier: importBinding.moduleSpecifier,
+        exportName: propertyName,
+        allowCompilerTransform,
+      }),
+    );
+  }
+  const selectedProperty = getSelectedObjectProperty(expression, propertyName, analysis);
+  return Boolean(
+    selectedProperty &&
+    analyzeConfigNode(selectedProperty.node, selectedProperty.analysis, allowCompilerTransform),
+  );
+};
+
 const analyzeConfigNode = (
   node: ts.Node,
   analysis: ConfigExpressionAnalysis,
@@ -1866,14 +1665,7 @@ const analyzeConfigNode = (
       (node.text === "babel-plugin-react-compiler" || node.text === "react-compiler")
     );
   }
-  if (
-    ts.isParenthesizedExpression(node) ||
-    ts.isAsExpression(node) ||
-    ts.isTypeAssertionExpression(node) ||
-    ts.isSatisfiesExpression(node) ||
-    ts.isNonNullExpression(node) ||
-    ts.isAwaitExpression(node)
-  ) {
+  if (isTransparentConfigExpression(node)) {
     return analyzeConfigNode(
       node.expression,
       analysis,
@@ -2133,113 +1925,24 @@ const analyzeConfigNode = (
         allowCompilerTransform && isCompilerTransformModule(requiredModuleSpecifier, node.name.text)
       );
     }
-    if (ts.isIdentifier(node.expression)) {
-      if (
-        analysis.localBindings.has(node.expression.text) ||
-        getScopedConfigBinding(node.expression).wasFound
-      ) {
-        const selectedProperty = getSelectedObjectProperty(
-          node.expression,
-          node.name.text,
-          analysis,
-        );
-        return Boolean(
-          selectedProperty &&
-          analyzeConfigNode(
-            selectedProperty.node,
-            selectedProperty.analysis,
-            allowCompilerTransform,
-          ),
-        );
-      }
-      const importBinding = getImportBinding(analysis.sourceFile, node.expression.text);
-      if (importBinding?.isNamespace) {
-        if (
-          allowCompilerTransform &&
-          isCompilerTransformModule(importBinding.moduleSpecifier, node.name.text)
-        ) {
-          return true;
-        }
-        if (
-          analyzeImportedConfig({
-            analysis,
-            moduleSpecifier: importBinding.moduleSpecifier,
-            exportName: node.name.text,
-            allowCompilerTransform,
-          })
-        ) {
-          return true;
-        }
-        return false;
-      }
-      const selectedProperty = getSelectedObjectProperty(node.expression, node.name.text, analysis);
-      if (selectedProperty) {
-        return analyzeConfigNode(
-          selectedProperty.node,
-          selectedProperty.analysis,
-          allowCompilerTransform,
-        );
-      }
-      return false;
-    }
-    return analyzeConfigNode(node.expression, analysis, allowCompilerTransform);
+    return analyzeConfigMemberAccess(
+      node.expression,
+      node.name.text,
+      analysis,
+      allowCompilerTransform,
+    );
   }
   if (
     ts.isElementAccessExpression(node) &&
     node.argumentExpression &&
     ts.isStringLiteralLike(node.argumentExpression)
   ) {
-    if (ts.isIdentifier(node.expression)) {
-      if (
-        analysis.localBindings.has(node.expression.text) ||
-        getScopedConfigBinding(node.expression).wasFound
-      ) {
-        const selectedProperty = getSelectedObjectProperty(
-          node.expression,
-          node.argumentExpression.text,
-          analysis,
-        );
-        return Boolean(
-          selectedProperty &&
-          analyzeConfigNode(
-            selectedProperty.node,
-            selectedProperty.analysis,
-            allowCompilerTransform,
-          ),
-        );
-      }
-      const importBinding = getImportBinding(analysis.sourceFile, node.expression.text);
-      if (importBinding?.isNamespace) {
-        if (
-          allowCompilerTransform &&
-          isCompilerTransformModule(importBinding.moduleSpecifier, node.argumentExpression.text)
-        ) {
-          return true;
-        }
-        return Boolean(
-          analyzeImportedConfig({
-            analysis,
-            moduleSpecifier: importBinding.moduleSpecifier,
-            exportName: node.argumentExpression.text,
-            allowCompilerTransform,
-          }),
-        );
-      }
-      const selectedProperty = getSelectedObjectProperty(
-        node.expression,
-        node.argumentExpression.text,
-        analysis,
-      );
-      if (selectedProperty) {
-        return analyzeConfigNode(
-          selectedProperty.node,
-          selectedProperty.analysis,
-          allowCompilerTransform,
-        );
-      }
-      return false;
-    }
-    return analyzeConfigNode(node.expression, analysis, allowCompilerTransform);
+    return analyzeConfigMemberAccess(
+      node.expression,
+      node.argumentExpression.text,
+      analysis,
+      allowCompilerTransform,
+    );
   }
   if (ts.isBinaryExpression(node)) {
     if (node.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken) {
@@ -2397,11 +2100,14 @@ const hasCompilerInPackageJsonConfig = (directory: string, packageJson: PackageJ
   );
 };
 
-const hasCompilerConfiguration = (directory: string, packageJson: PackageJson): boolean =>
+export const hasReactCompilerConfiguration = (
+  directory: string,
+  packageJson: PackageJson,
+): boolean =>
   hasCompilerInPackageJsonConfig(directory, packageJson) ||
   hasCompilerInConfigFiles(directory, REACT_COMPILER_CONFIG_FILENAMES);
 
-const hasCompilerConfigurationInAncestors = (directory: string): boolean => {
+export const hasReactCompilerConfigurationInAncestors = (directory: string): boolean => {
   if (isProjectBoundary(directory)) return false;
 
   let ancestorDirectory = path.dirname(directory);
@@ -2422,28 +2128,3 @@ const hasCompilerConfigurationInAncestors = (directory: string): boolean => {
 
   return false;
 };
-
-export const detectReactCompiler = (directory: string, packageJson: PackageJson): boolean =>
-  hasCompilerPackage(packageJson, REACT_COMPILER_RUNTIME_PACKAGES) ||
-  hasCompilerPackageInAncestors(directory, REACT_COMPILER_RUNTIME_PACKAGES) ||
-  hasCompilerConfiguration(directory, packageJson) ||
-  hasCompilerConfigurationInAncestors(directory);
-
-export const detectReactCompilerLintPlugin = (
-  directory: string,
-  packageJson: PackageJson,
-): boolean =>
-  hasCompilerPackage(packageJson, REACT_COMPILER_LINT_PACKAGES) ||
-  hasCompilerPackageInAncestors(directory, REACT_COMPILER_LINT_PACKAGES);
-
-// Whether `next.config.*` opts into static HTML export (`output: "export"`).
-// Reuses the same next.config filenames + raw-text read as the React Compiler
-// detector above (the config can be TS/ESM, so it can't be cheaply imported at
-// discovery time). A per-project fact — not walked into ancestors.
-export const detectNextjsStaticExport = (directory: string): boolean =>
-  NEXT_CONFIG_FILENAMES.some((filename) => {
-    const filePath = path.join(directory, filename);
-    return (
-      isFile(filePath) && STATIC_EXPORT_OUTPUT_PATTERN.test(fs.readFileSync(filePath, "utf-8"))
-    );
-  });

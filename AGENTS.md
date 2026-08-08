@@ -74,7 +74,7 @@ packages/
 
 ## Effect v4 Conventions
 
-Built on `effect@4.0.0-beta.70`. See `tmp/effect/.patterns/effect.md` (cloned reference)
+Built on `effect@4.0.0-beta.102`. See `tmp/effect/.patterns/effect.md` (cloned reference)
 and `~/Developer/react-doctor-evals/src/` (the application that pioneered these patterns
 for this codebase) for canonical examples.
 
@@ -158,9 +158,7 @@ for this codebase) for canonical examples.
   sibling `*Capture` service (e.g. `ReporterCapture`, `ProgressCapture`).
 - `layerNoop` for the production layer that has void-return / discard semantics
   (Reporter, Progress). Analyzers (Linter, DeadCode) use `layerOf([])` instead.
-- `layerComposite(backends)` for the slot a future second backend plugs into.
-- Implementation-specific names: `layerOxlint`, `layerHttp`, `layerNdjson(path)`,
-  `layerOra(factory)`.
+- Implementation-specific names: `layerOxlint`, `layerHttp`, `layerOra(factory)`.
 
 ### Schemas
 
