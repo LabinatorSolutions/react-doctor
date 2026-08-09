@@ -1,13 +1,14 @@
 import type * as Effect from "effect/Effect";
 import type { OxlintUnavailable, ReactDoctorErrorReason } from "../errors.js";
 import type { DiagnosticSurface, ReactDoctorConfig } from "./config.js";
-import type { Diagnostic, SuppressedRuleCount } from "./diagnostic.js";
+import type { Diagnostic, SourceFileEntry, SuppressedRuleCount } from "./diagnostic.js";
 import type { ProjectInfo } from "./project-info.js";
 import type { ScoreRequestMetadata, ScoreResult } from "./score.js";
 
 export interface InspectInput {
   readonly directory: string;
   readonly precomputedSourceFileCount?: number;
+  readonly precomputedSourceFiles?: ReadonlyArray<SourceFileEntry>;
   readonly includePaths: ReadonlyArray<string>;
   readonly customRulesOnly: boolean;
   readonly respectInlineDisables: boolean;

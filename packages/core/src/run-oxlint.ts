@@ -336,7 +336,10 @@ export const runOxlint = async (options: RunOxlintOptions): Promise<Diagnostic[]
   // `// oxlint-disable*` directives — we let oxlint apply them.
   const restoreDisableDirectives = respectInlineDisables
     ? () => {}
-    : await neutralizeDisableDirectives(rootDirectory, includePaths);
+    : await neutralizeDisableDirectives(
+        rootDirectory,
+        includePaths ?? options.precomputedSourceFiles?.map((sourceFile) => sourceFile.path),
+      );
 
   // Created last so any throw in the setup above (plugin resolution,
   // user-plugin loading) happens before the temp dir exists — nothing
@@ -412,9 +415,10 @@ export const runOxlint = async (options: RunOxlintOptions): Promise<Diagnostic[]
     // Only a full scan pays the walk — diff / staged scans pass
     // explicit paths.
     const sizedScanFiles =
-      includePaths === undefined ? listSourceFilesWithSize(rootDirectory) : null;
+      options.precomputedSourceFiles ??
+      (includePaths === undefined ? listSourceFilesWithSize(rootDirectory) : null);
     const candidateFiles =
-      includePaths !== undefined ? includePaths : (sizedScanFiles ?? []).map((entry) => entry.path);
+      sizedScanFiles === null ? (includePaths ?? []) : sizedScanFiles.map((entry) => entry.path);
     const projectIndexModuleSources =
       includePaths === undefined && options.deadlineEpochMs === undefined
         ? await collectProjectIndexModuleSources(rootDirectory, candidateFiles)

@@ -1,11 +1,13 @@
 import type { WorkerSlots } from "../utils/create-worker-slots.js";
 import type { ReactDoctorConfig } from "./config.js";
+import type { SourceFileEntry } from "./diagnostic.js";
 import type { ProjectInfo } from "./project-info.js";
 
 export interface RunOxlintOptions {
   rootDirectory: string;
   project: ProjectInfo;
   includePaths?: string[];
+  precomputedSourceFiles?: ReadonlyArray<SourceFileEntry>;
   nodeBinaryPath?: string;
   customRulesOnly?: boolean;
   respectInlineDisables?: boolean;
