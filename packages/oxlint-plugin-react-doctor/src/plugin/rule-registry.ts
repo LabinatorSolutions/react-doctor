@@ -358,6 +358,7 @@ import { noMixedSrcsetDescriptors } from "./rules/correctness/no-mixed-srcset-de
 import { noMoment } from "./rules/bundle-size/no-moment.js";
 import { noMonotonousPageSpacing } from "./rules/design/no-monotonous-page-spacing.js";
 import { noMultiComp } from "./rules/react-builtins/no-multi-comp.js";
+import { noMultiComponentFile } from "./rules/react-builtins/no-multi-component-file.js";
 import { noMultipleMainLandmarks } from "./rules/a11y/no-multiple-main-landmarks.js";
 import { noMultipleUnlabeledNavigationLandmarks } from "./rules/a11y/no-multiple-unlabeled-navigation-landmarks.js";
 import { noMutableInDeps } from "./rules/state-and-effects/no-mutable-in-deps.js";
@@ -5096,6 +5097,18 @@ export const reactDoctorRules = [
       framework: "global",
       category: "Maintainability",
       requires: [...new Set<Capability>(["react", ...(noMultiComp.requires ?? [])])],
+    },
+  },
+  {
+    key: "react-doctor/no-multi-component-file",
+    id: "no-multi-component-file",
+    source: "react-doctor",
+    originallyExternal: false,
+    rule: {
+      ...noMultiComponentFile,
+      framework: "global",
+      category: "Maintainability",
+      requires: [...new Set<Capability>(["react", ...(noMultiComponentFile.requires ?? [])])],
     },
   },
   {
