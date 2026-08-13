@@ -40,11 +40,14 @@ export interface DiagnoseResult {
   scannedFileCount?: number;
   project: ProjectInfo;
   /**
-   * Legacy field name indicating whether the scanned project resolved a
-   * supported framework or library capability. `false` means only
-   * framework-neutral rules ran. Mirrors `JsonReport.reactDetected`; same
-   * predicate as `hasSupportedFrameworkOrLibrary(result.project)`. Always
-   * set by `diagnose()`; optional so hand-constructed results keep compiling.
+   * Whether the scanned project resolved a React-compatible runtime directly
+   * or through a React-backed framework. `false` means every React-runtime
+   * rule family was gated off, not that the scan target was unsupported:
+   * other detected framework and library rule families still run, as do
+   * framework-neutral rules on any analyzable project.
+   * Mirrors `JsonReport.reactDetected`; same predicate as
+   * `hasReactRuntime(result.project)`. Always set by `diagnose()`;
+   * optional so hand-constructed results keep compiling.
    */
   reactDetected?: boolean;
   elapsedMilliseconds: number;
@@ -103,8 +106,8 @@ export interface DiagnoseProjectsResult {
   diagnostics: Diagnostic[];
   score: ScoreResult | null;
   /**
-   * Legacy field name indicating whether any successfully scanned project
-   * resolved a supported framework or library capability. Absent when no
+   * Whether any successfully scanned project resolved a React-compatible
+   * runtime directly or through a React-backed framework. Absent when no
    * project scanned successfully.
    * See `DiagnoseResult.reactDetected` for gating guidance; per-project
    * detail is on each `ProjectResultOk.reactDetected`.

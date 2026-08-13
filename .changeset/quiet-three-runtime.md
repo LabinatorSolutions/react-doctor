@@ -5,4 +5,4 @@
 "@react-doctor/core": patch
 ---
 
-Recognize every detected framework and library capability as a supported scan target, including plain Three.js projects and React-backed frameworks without direct React declarations. The legacy `reactDetected` JSON and API signal now reflects that broader supported-project detection, and remote-installer diagnostics anchor on the executable download command.
+Recognize every detected framework and library capability as a supported scan target, including plain Three.js projects and React-backed frameworks without direct React declarations, and anchor remote-installer diagnostics on the executable download command.

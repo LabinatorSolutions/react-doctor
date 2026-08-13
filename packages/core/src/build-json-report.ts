@@ -13,7 +13,7 @@ import type {
 import { getDiagnosticRuleIdentity } from "./get-diagnostic-rule-identity.js";
 import { buildDiagnosticIdentity } from "./schemas.js";
 import { summarizeDiagnostics } from "./summarize-diagnostics.js";
-import { hasSupportedFrameworkOrLibrary } from "./utils/has-supported-framework-or-library.js";
+import { hasReactRuntime } from "./utils/has-react-runtime.js";
 import { isScanComplete } from "./utils/is-scan-complete.js";
 import { toNormalizedRelativePath } from "./utils/to-normalized-relative-path.js";
 
@@ -166,11 +166,7 @@ export const buildJsonReport = (input: BuildJsonReportInput): JsonReportV3 => {
       : {}),
     ...(input.baselineDegraded ? { baselineDegraded: true } : {}),
     ...(input.scans.length > 0
-      ? {
-          reactDetected: input.scans.some((scan) =>
-            hasSupportedFrameworkOrLibrary(scan.result.project),
-          ),
-        }
+      ? { reactDetected: input.scans.some((scan) => hasReactRuntime(scan.result.project)) }
       : {}),
     version: input.version,
     ok: true as const,

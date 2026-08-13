@@ -389,10 +389,13 @@ export interface JsonReportV1 {
   mode: JsonReportMode;
   baselineDegraded?: boolean;
   /**
-   * Legacy field name indicating whether any scanned project resolved a
-   * supported framework or library capability. `false` means only
-   * framework-neutral rules ran. Absent when nothing was scanned (`projects`
-   * is empty), on error reports, and on reports from older CLI versions.
+   * Whether any scanned project resolved a React-compatible runtime directly
+   * or through a React-backed framework. `false` means every React-runtime
+   * rule family was gated off, not that the scan target was unsupported:
+   * other detected framework and library rule families still run, as do
+   * framework-neutral rules on any analyzable project. Absent when
+   * nothing was scanned (`projects` is empty), on error reports, and on
+   * reports from older CLI versions.
    */
   reactDetected?: boolean;
   diff: JsonReportDiffInfo | null;

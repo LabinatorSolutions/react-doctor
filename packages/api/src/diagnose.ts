@@ -11,7 +11,7 @@ import {
   detectAiTrainingEnvironment,
   Files,
   Git,
-  hasSupportedFrameworkOrLibrary,
+  hasReactRuntime,
   layerUserOtlp,
   Linter,
   LintPartialFailures,
@@ -152,7 +152,7 @@ const outputToDiagnoseResult = (
     analyzedFiles: output.analyzedFiles,
     scannedFileCount: output.scannedFileCount,
     project: output.project,
-    reactDetected: hasSupportedFrameworkOrLibrary(output.project),
+    reactDetected: hasReactRuntime(output.project),
     elapsedMilliseconds,
   };
 };

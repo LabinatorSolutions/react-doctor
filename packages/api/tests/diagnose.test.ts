@@ -69,7 +69,7 @@ describe("diagnose", () => {
     }
   });
 
-  it("sets reactDetected from supported framework and library capabilities", async () => {
+  it("sets reactDetected true on a React project and false on a non-React one", async () => {
     const reactResult = await diagnose(path.join(FIXTURES_DIRECTORY, "basic-react"), {
       deadCode: false,
       lint: false,
@@ -93,7 +93,9 @@ describe("diagnose", () => {
     } finally {
       fs.rmSync(nonReactDirectory, { recursive: true, force: true });
     }
+  });
 
+  it("scans a Three.js project without reporting React", async () => {
     const threeDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "rdc-three-"));
     fs.writeFileSync(
       path.join(threeDirectory, "package.json"),
@@ -106,7 +108,7 @@ describe("diagnose", () => {
     );
     try {
       const threeResult = await diagnose(threeDirectory, { deadCode: false, lint: false });
-      expect(threeResult.reactDetected).toBe(true);
+      expect(threeResult.reactDetected).toBe(false);
       expect(threeResult.project.reactVersion).toBeNull();
       expect(threeResult.project.hasThree).toBe(true);
     } finally {
