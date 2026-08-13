@@ -69,7 +69,7 @@ describe("diagnose", () => {
     }
   });
 
-  it("sets reactDetected true on a React project and false on a non-React one", async () => {
+  it("sets reactDetected from supported framework and library capabilities", async () => {
     const reactResult = await diagnose(path.join(FIXTURES_DIRECTORY, "basic-react"), {
       deadCode: false,
       lint: false,
@@ -92,6 +92,25 @@ describe("diagnose", () => {
       expect(nonReactResult.project.reactVersion).toBeNull();
     } finally {
       fs.rmSync(nonReactDirectory, { recursive: true, force: true });
+    }
+
+    const threeDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "rdc-three-"));
+    fs.writeFileSync(
+      path.join(threeDirectory, "package.json"),
+      JSON.stringify({ name: "three-tool", dependencies: { three: "0.185.1" } }),
+    );
+    fs.mkdirSync(path.join(threeDirectory, "src"));
+    fs.writeFileSync(
+      path.join(threeDirectory, "src", "main.ts"),
+      'import * as THREE from "three";\nexport const scene = new THREE.Scene();\n',
+    );
+    try {
+      const threeResult = await diagnose(threeDirectory, { deadCode: false, lint: false });
+      expect(threeResult.reactDetected).toBe(true);
+      expect(threeResult.project.reactVersion).toBeNull();
+      expect(threeResult.project.hasThree).toBe(true);
+    } finally {
+      fs.rmSync(threeDirectory, { recursive: true, force: true });
     }
   });
 

@@ -280,13 +280,15 @@ describe("buildJsonReport", () => {
     expect(report.reactDetected).toBe(true);
   });
 
-  it("marks reactDetected false when no scanned project resolved React or Preact", () => {
+  it("marks reactDetected false when no scanned project resolved a supported capability", () => {
     const nonReactProject: ProjectInfo = {
       ...projectInfo,
       reactVersion: null,
       reactMajorVersion: null,
       preactVersion: null,
       preactMajorVersion: null,
+      valtioVersion: null,
+      valtioMajorVersion: null,
       framework: "unknown",
     };
     const report = buildJsonReport({
@@ -302,6 +304,29 @@ describe("buildJsonReport", () => {
     expect(report.reactDetected).toBe(false);
     expect(report.ok).toBe(true);
     expect(report.diagnostics).toHaveLength(0);
+  });
+
+  it("marks reactDetected true for a plain Three.js project", () => {
+    const threeProject: ProjectInfo = {
+      ...projectInfo,
+      reactVersion: null,
+      reactMajorVersion: null,
+      preactVersion: null,
+      preactMajorVersion: null,
+      framework: "unknown",
+      hasThree: true,
+      threeVersion: "0.185.1",
+      threeRelease: 185,
+    };
+    const report = buildJsonReport({
+      version: "1.2.3",
+      directory: "/repo",
+      mode: "full",
+      diff: null,
+      scans: [{ directory: "/repo", result: result({ diagnostics: [], project: threeProject }) }],
+      totalElapsedMilliseconds: 1200,
+    });
+    expect(report.reactDetected).toBe(true);
   });
 
   it("marks reactDetected true in a workspace where only some roots are React", () => {
