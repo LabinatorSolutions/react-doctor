@@ -71,6 +71,14 @@ const TOOLCHAIN_PACKAGE_SPECIFIERS = [
   "eslint-plugin-react-hooks/package.json",
 ] as const;
 const bundledRequire = createRequire(import.meta.url);
+const RULE_PLUGIN_CONTENT_FINGERPRINT = (() => {
+  try {
+    const pluginEntryPath = bundledRequire.resolve("oxlint-plugin-react-doctor");
+    return `oxlint-plugin-react-doctor#fingerprint=${hashFileContents(pluginEntryPath) ?? "unreadable"}`;
+  } catch {
+    return "oxlint-plugin-react-doctor#fingerprint=unresolved";
+  }
+})();
 
 interface PackageVersionView {
   readonly version?: unknown;
@@ -353,12 +361,9 @@ const fileFingerprint = (filePath: string): string | null => {
   }
 };
 
-// Versioned (not file-fingerprinted) like the lint ruleset hash, so the key
-// survives a restored/re-extracted install in CI — extraction mtimes are an
-// implementation detail of the installer, not toolchain identity. The one
-// exception: a foreign oxlint Node (the nvm fallback) keeps the conservative
-// stat identity rather than paying a version-probe subprocess here.
-const resolveToolchainFingerprint = (nodeBinaryPath: string | null): ReadonlyArray<string> => {
+export const resolveScanResultToolchainFingerprint = (
+  nodeBinaryPath: string | null,
+): ReadonlyArray<string> => {
   const fingerprints: string[] = [];
   if (nodeBinaryPath !== null) {
     fingerprints.push(
@@ -376,6 +381,7 @@ const resolveToolchainFingerprint = (nodeBinaryPath: string | null): ReadonlyArr
       fingerprints.push(`${specifier}=missing`);
     }
   }
+  fingerprints.push(RULE_PLUGIN_CONTENT_FINGERPRINT);
   return fingerprints;
 };
 
@@ -397,7 +403,7 @@ export const buildScanResultCacheKey = (input: ScanResultCacheKeyInput): string 
     dotenvFingerprint: resolveDotenvFingerprint(input.projectDirectory),
     reactDoctorVersion: input.version,
     nodeVersion: process.version,
-    toolchainFingerprint: resolveToolchainFingerprint(input.nodeBinaryPath),
+    toolchainFingerprint: resolveScanResultToolchainFingerprint(input.nodeBinaryPath),
     configFingerprint: computeConfigFingerprint(input.projectDirectory, input.version),
     hasConfigOverride: input.hasConfigOverride,
     configSourceDirectory: input.configSourceDirectory,

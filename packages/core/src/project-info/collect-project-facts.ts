@@ -10,10 +10,13 @@ import {
   extractDependencyInfo,
   getDependencyDeclaration,
   getDependencySpec,
+  REACT_THREE_FIBER_DEPENDENCY_NAMES,
+  REACT_THREE_FIBER_ECOSYSTEM_DEPENDENCY_NAMES,
   REACT_SECTIONS,
   resolveCatalogBackedDependencyVersion,
   resolveCatalogVersion,
   TAILWIND_ZOD_SECTIONS,
+  THREE_DEPENDENCY_NAMES,
 } from "./dependencies.js";
 import { isFile } from "./fs-utils.js";
 import { findMonorepoRoot } from "./monorepo-root.js";
@@ -39,7 +42,6 @@ const MOBX_REACT_PACKAGE_NAME = "mobx-react";
 const MOBX_REACT_LITE_PACKAGE_NAME = "mobx-react-lite";
 const MOBX_STATE_TREE_PACKAGE_NAME = "mobx-state-tree";
 const MOBX_REACT_OBSERVER_PACKAGE_NAME = "mobx-react-observer";
-const REACT_THREE_FIBER_DEPENDENCY_NAMES = ["@react-three/fiber", "react-three-fiber"] as const;
 const REACT_THREE_FIBER_SECTIONS = [
   "dependencies",
   "peerDependencies",
@@ -52,11 +54,6 @@ const THREE_DEPENDENCY_SECTIONS = [
   "optionalDependencies",
   "devDependencies",
 ] as const;
-const REACT_THREE_FIBER_ECOSYSTEM_DEPENDENCY_NAMES = [
-  ...REACT_THREE_FIBER_DEPENDENCY_NAMES,
-  "@react-three/drei",
-] as const;
-const THREE_DEPENDENCY_NAMES = [...REACT_THREE_FIBER_ECOSYSTEM_DEPENDENCY_NAMES, "three"] as const;
 const REACT_ROUTER_DEPENDENCY_NAMES: readonly string[] = [
   "@react-router/dev",
   "react-router-dom",
