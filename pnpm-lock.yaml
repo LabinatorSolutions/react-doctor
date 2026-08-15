@@ -238,6 +238,9 @@ importers:
       agent-install:
         specifier: 0.0.5
         version: 0.0.5
+      bippy:
+        specifier: ^0.6.1
+        version: 0.6.1(react@19.2.5)
       conf:
         specifier: ^15.1.0
         version: 15.1.0
@@ -2612,6 +2615,11 @@ packages:
   better-path-resolve@1.0.0:
     resolution: {integrity: sha512-pbnl5XzGBdrFU/wT4jqmJVPn2B6UHPBOhzMQkY/SPUPB6QtUXtmBHBIwCbXJol93mOpGMnQyP/+BB19q04xj7g==}
     engines: {node: '>=4'}
+
+  bippy@0.6.1:
+    resolution: {integrity: sha512-ky4m94Y/KfsddjGkKTsV4uFjZqkJjpOjQ2t5gKPdX6XH1MNxMNX5FrVefsxV4lpjemEmEdwe0e0YbzAMNs3oUQ==}
+    peerDependencies:
+      react: '>=17.0.1'
 
   bowser@2.14.1:
     resolution: {integrity: sha512-tzPjzCxygAKWFOJP011oxFHs57HzIhOEracIgAePE4pqB3LikALKnSzUyU4MGs9/iCEUuHlAJTjTc5M+u7YEGg==}
@@ -6465,6 +6473,10 @@ snapshots:
   better-path-resolve@1.0.0:
     dependencies:
       is-windows: 1.0.2
+
+  bippy@0.6.1(react@19.2.5):
+    dependencies:
+      react: 19.2.5
 
   bowser@2.14.1: {}
 
