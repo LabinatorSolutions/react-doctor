@@ -58,6 +58,7 @@ ${highlighter.dim("Examples:")}
 ${formatExampleLines([
   ["react-doctor", "scan the current project"],
   ["react-doctor ./apps/web", "scan a specific directory"],
+  ["react-doctor scan http://localhost:3000", "profile one interaction in a running React app"],
   ["react-doctor --scope changed --base main", "scan only new issues vs. main"],
   ["react-doctor --project modules/a,modules/b", "score each module separately (names or paths)"],
   ["react-doctor --staged", "scan staged files (pre-commit hook)"],
@@ -110,6 +111,42 @@ ${highlighter.dim("Scope:")}
   Runs every rule tagged ${highlighter.info("design")}; all design rules stay opt-in during a general health scan.
   Whole-project maintainability, supply-chain, external lint-config, custom-plugin, and health-score passes are skipped.
   Standard scan flags such as ${highlighter.info("--scope")}, ${highlighter.info("--project")}, ${highlighter.info("--verbose")}, and ${highlighter.info("--json")} still work.
+`;
+
+const renderRuntimeScanHelpEpilog = (): string => `
+${highlighter.dim("Examples:")}
+${formatExampleLines([
+  ["react-doctor scan", "choose a detected local app or enter its URL"],
+  ["react-doctor scan http://localhost:3000", "scan one interaction in isolated Chrome"],
+  [
+    "react-doctor scan http://localhost:3000 --format json",
+    "print a structured report for an agent",
+  ],
+  [
+    "react-doctor scan http://localhost:3000 --trace-out ./trace.json.gz",
+    "choose where the private trace is saved",
+  ],
+  [
+    "react-doctor scan https://app.example.com --cdp http://127.0.0.1:9222",
+    "reuse a dedicated debug-enabled Chrome profile",
+  ],
+])}
+
+${highlighter.dim("How scanning works:")}
+  1. Start the app. Prefer a production build for representative timings.
+  2. Run this command. If you omit the URL, React Doctor suggests running localhost apps.
+  3. Reproduce one slow interaction within five minutes. Purple labels show component renders.
+  4. Return here and press Enter. React Doctor prints the report and trace path.
+
+${highlighter.dim("Authenticated apps:")}
+  The default temporary profile starts signed out. Start a separate Chrome profile with remote
+  debugging, sign in there, close its non-blank tabs, then pass ${highlighter.info("--cdp <url>")}.
+  React Doctor closes blank startup tabs and its scan tab. The attached browser stays open.
+
+${highlighter.dim("Output and privacy:")}
+  ${highlighter.info("text")} summarizes the evidence for people. ${highlighter.info("json")} returns one report; ${highlighter.info("jsonl")} returns one record per line.
+  Chrome tracing is browser-wide, so ${highlighter.info("--cdp")} rejects profiles with open pages. The compressed
+  ${highlighter.info(".json.gz")} trace stays local and can contain page URLs, source paths, and profiling data.
 `;
 
 const MAX_DURATION_OPTION_DESCRIPTION =
@@ -252,6 +289,19 @@ program
   .action(async (directory, _options, command) => {
     const { designAction } = await import("./commands/design.js");
     return designAction(directory ?? ".", command.optsWithGlobals());
+  });
+
+program
+  .command("scan")
+  .description("Scan a React interaction in Chrome until you press Enter")
+  .argument("[url]", "HTTP(S) URL of the running React app; detects local apps when omitted")
+  .option("-f, --format <format>", "report format: text, json, or jsonl", "text")
+  .option("--cdp <url>", "reuse Chrome at this remote-debugging endpoint")
+  .option("--trace-out <path>", "save the compressed .json.gz DevTools trace at this path")
+  .addHelpText("after", renderRuntimeScanHelpEpilog)
+  .action(async (url, options) => {
+    const { runtimeScanAction } = await import("./commands/runtime-scan.js");
+    return runtimeScanAction(url, options);
   });
 
 program
