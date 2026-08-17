@@ -32,6 +32,9 @@ import { asyncDeferAwait } from "./rules/performance/async-defer-await.js";
 import { asyncParallel } from "./rules/js-performance/async-parallel.js";
 import { authTokenInWebStorage } from "./rules/security/auth-token-in-web-storage.js";
 import { autocompleteValid } from "./rules/a11y/autocomplete-valid.js";
+import { baseUiDialogPopupRequiresTitle } from "./rules/a11y/base-ui-dialog-popup-requires-title.js";
+import { baseUiFieldRequiresLabel } from "./rules/a11y/base-ui-field-requires-label.js";
+import { baseUiTabsTabRequiresList } from "./rules/correctness/base-ui-tabs-tab-requires-list.js";
 import { buildPipelineSecretBoundary } from "./rules/security-scan/build-pipeline-secret-boundary.js";
 import { buttonHasType } from "./rules/react-builtins/button-has-type.js";
 import { checkedRequiresOnchangeOrReadonly } from "./rules/react-builtins/checked-requires-onchange-or-readonly.js";
@@ -612,7 +615,10 @@ import { r3fWebgpuNoLegacyMaterialApi } from "./rules/r3f/r3f-webgpu-no-legacy-m
 import { r3fWebgpuNoUnregisteredPipelinePass } from "./rules/r3f/r3f-webgpu-no-unregistered-pipeline-pass.js";
 import { r3fWebgpuRequireAsyncInit } from "./rules/r3f/r3f-webgpu-require-async-init.js";
 import { radioInputMissingName } from "./rules/correctness/radio-input-missing-name.js";
+import { radixDialogContentRequiresTitle } from "./rules/a11y/radix-dialog-content-requires-title.js";
+import { radixTabsTriggerRequiresList } from "./rules/correctness/radix-tabs-trigger-requires-list.js";
 import { rawSqlInjectionRisk } from "./rules/security-scan/raw-sql-injection-risk.js";
+import { reactAriaDialogRequiresHeading } from "./rules/a11y/react-aria-dialog-requires-heading.js";
 import { reactCompilerNoManualMemoization } from "./rules/architecture/react-compiler-no-manual-memoization.js";
 import { reactInJsxScope } from "./rules/react-builtins/react-in-jsx-scope.js";
 import { reactMarkdownUnsanitizedRawHtml } from "./rules/security/react-markdown-unsanitized-raw-html.js";
@@ -744,6 +750,11 @@ import { serverFetchWithoutRevalidate } from "./rules/server/server-fetch-withou
 import { serverHoistStaticIo } from "./rules/server/server-hoist-static-io.js";
 import { serverNoMutableModuleState } from "./rules/server/server-no-mutable-module-state.js";
 import { serverSequentialIndependentAwait } from "./rules/server/server-sequential-independent-await.js";
+import { shadcnCommandItemStateVariantRequiresValue } from "./rules/correctness/shadcn-command-item-state-variant-requires-value.js";
+import { shadcnDialogContentRequiresTitle } from "./rules/a11y/shadcn-dialog-content-requires-title.js";
+import { shadcnFormItemRequiresLabel } from "./rules/a11y/shadcn-form-item-requires-label.js";
+import { shadcnIconButtonRequiresLabel } from "./rules/a11y/shadcn-icon-button-requires-label.js";
+import { shadcnInputGroupNoRawControls } from "./rules/correctness/shadcn-input-group-no-raw-controls.js";
 import { shadcnTabsTriggerRequiresList } from "./rules/correctness/shadcn-tabs-trigger-requires-list.js";
 import { stateInConstructor } from "./rules/react-builtins/state-in-constructor.js";
 import { stylePropObject } from "./rules/react-builtins/style-prop-object.js";
@@ -754,6 +765,7 @@ import { supabaseRlsPolicyRisk } from "./rules/security-scan/supabase-rls-policy
 import { supabaseTableMissingRls } from "./rules/security-scan/supabase-table-missing-rls.js";
 import { svgFilterClickjackingRisk } from "./rules/security-scan/svg-filter-clickjacking-risk.js";
 import { tabindexNoPositive } from "./rules/a11y/tabindex-no-positive.js";
+import { tanstackFormOnSubmitRequiresPreventDefault } from "./rules/correctness/tanstack-form-on-submit-requires-prevent-default.js";
 import { tanstackStartGetMutation } from "./rules/tanstack-start/tanstack-start-get-mutation.js";
 import { tanstackStartLoaderParallelFetch } from "./rules/tanstack-start/tanstack-start-loader-parallel-fetch.js";
 import { tanstackStartMissingHeadContent } from "./rules/tanstack-start/tanstack-start-missing-head-content.js";
@@ -769,6 +781,8 @@ import { tanstackStartRedirectInTryCatch } from "./rules/tanstack-start/tanstack
 import { tanstackStartRoutePropertyOrder } from "./rules/tanstack-start/tanstack-start-route-property-order.js";
 import { tanstackStartServerFnMethodOrder } from "./rules/tanstack-start/tanstack-start-server-fn-method-order.js";
 import { tanstackStartServerFnValidateInput } from "./rules/tanstack-start/tanstack-start-server-fn-validate-input.js";
+import { tanstackTableNoUnstableDataOrColumns } from "./rules/correctness/tanstack-table-no-unstable-data-or-columns.js";
+import { tanstackVirtualMeasureElementRequiresDataIndex } from "./rules/correctness/tanstack-virtual-measure-element-requires-data-index.js";
 import { tenantStaticProxyRisk } from "./rules/security-scan/tenant-static-proxy-risk.js";
 import { threeCapDevicePixelRatio } from "./rules/r3f/three-cap-device-pixel-ratio.js";
 import { threeEffectComposerOutputPassLast } from "./rules/r3f/three-effect-composer-output-pass-last.js";
@@ -1178,6 +1192,43 @@ export const reactDoctorRules = [
       framework: "global",
       category: "Accessibility",
       requires: [...new Set<Capability>(["react", ...(autocompleteValid.requires ?? [])])],
+    },
+  },
+  {
+    key: "react-doctor/base-ui-dialog-popup-requires-title",
+    id: "base-ui-dialog-popup-requires-title",
+    source: "react-doctor",
+    originallyExternal: false,
+    rule: {
+      ...baseUiDialogPopupRequiresTitle,
+      framework: "global",
+      category: "Accessibility",
+      requires: [
+        ...new Set<Capability>(["react", ...(baseUiDialogPopupRequiresTitle.requires ?? [])]),
+      ],
+    },
+  },
+  {
+    key: "react-doctor/base-ui-field-requires-label",
+    id: "base-ui-field-requires-label",
+    source: "react-doctor",
+    originallyExternal: false,
+    rule: {
+      ...baseUiFieldRequiresLabel,
+      framework: "global",
+      category: "Accessibility",
+      requires: [...new Set<Capability>(["react", ...(baseUiFieldRequiresLabel.requires ?? [])])],
+    },
+  },
+  {
+    key: "react-doctor/base-ui-tabs-tab-requires-list",
+    id: "base-ui-tabs-tab-requires-list",
+    source: "react-doctor",
+    originallyExternal: false,
+    rule: {
+      ...baseUiTabsTabRequiresList,
+      framework: "global",
+      category: "Bugs",
     },
   },
   {
@@ -8478,6 +8529,31 @@ export const reactDoctorRules = [
     },
   },
   {
+    key: "react-doctor/radix-dialog-content-requires-title",
+    id: "radix-dialog-content-requires-title",
+    source: "react-doctor",
+    originallyExternal: false,
+    rule: {
+      ...radixDialogContentRequiresTitle,
+      framework: "global",
+      category: "Accessibility",
+      requires: [
+        ...new Set<Capability>(["react", ...(radixDialogContentRequiresTitle.requires ?? [])]),
+      ],
+    },
+  },
+  {
+    key: "react-doctor/radix-tabs-trigger-requires-list",
+    id: "radix-tabs-trigger-requires-list",
+    source: "react-doctor",
+    originallyExternal: false,
+    rule: {
+      ...radixTabsTriggerRequiresList,
+      framework: "global",
+      category: "Bugs",
+    },
+  },
+  {
     key: "react-doctor/raw-sql-injection-risk",
     id: "raw-sql-injection-risk",
     source: "react-doctor",
@@ -8487,6 +8563,20 @@ export const reactDoctorRules = [
       framework: "global",
       category: "Security",
       tags: [...new Set(["security-scan", ...(rawSqlInjectionRisk.tags ?? [])])],
+    },
+  },
+  {
+    key: "react-doctor/react-aria-dialog-requires-heading",
+    id: "react-aria-dialog-requires-heading",
+    source: "react-doctor",
+    originallyExternal: false,
+    rule: {
+      ...reactAriaDialogRequiresHeading,
+      framework: "global",
+      category: "Accessibility",
+      requires: [
+        ...new Set<Capability>(["react", ...(reactAriaDialogRequiresHeading.requires ?? [])]),
+      ],
     },
   },
   {
@@ -10041,6 +10131,70 @@ export const reactDoctorRules = [
     },
   },
   {
+    key: "react-doctor/shadcn-command-item-state-variant-requires-value",
+    id: "shadcn-command-item-state-variant-requires-value",
+    source: "react-doctor",
+    originallyExternal: false,
+    rule: {
+      ...shadcnCommandItemStateVariantRequiresValue,
+      framework: "global",
+      category: "Bugs",
+    },
+  },
+  {
+    key: "react-doctor/shadcn-dialog-content-requires-title",
+    id: "shadcn-dialog-content-requires-title",
+    source: "react-doctor",
+    originallyExternal: false,
+    rule: {
+      ...shadcnDialogContentRequiresTitle,
+      framework: "global",
+      category: "Accessibility",
+      requires: [
+        ...new Set<Capability>(["react", ...(shadcnDialogContentRequiresTitle.requires ?? [])]),
+      ],
+    },
+  },
+  {
+    key: "react-doctor/shadcn-form-item-requires-label",
+    id: "shadcn-form-item-requires-label",
+    source: "react-doctor",
+    originallyExternal: false,
+    rule: {
+      ...shadcnFormItemRequiresLabel,
+      framework: "global",
+      category: "Accessibility",
+      requires: [
+        ...new Set<Capability>(["react", ...(shadcnFormItemRequiresLabel.requires ?? [])]),
+      ],
+    },
+  },
+  {
+    key: "react-doctor/shadcn-icon-button-requires-label",
+    id: "shadcn-icon-button-requires-label",
+    source: "react-doctor",
+    originallyExternal: false,
+    rule: {
+      ...shadcnIconButtonRequiresLabel,
+      framework: "global",
+      category: "Accessibility",
+      requires: [
+        ...new Set<Capability>(["react", ...(shadcnIconButtonRequiresLabel.requires ?? [])]),
+      ],
+    },
+  },
+  {
+    key: "react-doctor/shadcn-input-group-no-raw-controls",
+    id: "shadcn-input-group-no-raw-controls",
+    source: "react-doctor",
+    originallyExternal: false,
+    rule: {
+      ...shadcnInputGroupNoRawControls,
+      framework: "global",
+      category: "Bugs",
+    },
+  },
+  {
     key: "react-doctor/shadcn-tabs-trigger-requires-list",
     id: "shadcn-tabs-trigger-requires-list",
     source: "react-doctor",
@@ -10157,6 +10311,17 @@ export const reactDoctorRules = [
       framework: "global",
       category: "Accessibility",
       requires: [...new Set<Capability>(["react", ...(tabindexNoPositive.requires ?? [])])],
+    },
+  },
+  {
+    key: "react-doctor/tanstack-form-on-submit-requires-prevent-default",
+    id: "tanstack-form-on-submit-requires-prevent-default",
+    source: "react-doctor",
+    originallyExternal: false,
+    rule: {
+      ...tanstackFormOnSubmitRequiresPreventDefault,
+      framework: "global",
+      category: "Bugs",
     },
   },
   {
@@ -10321,6 +10486,28 @@ export const reactDoctorRules = [
     rule: {
       ...tanstackStartServerFnValidateInput,
       framework: "tanstack-start",
+      category: "Bugs",
+    },
+  },
+  {
+    key: "react-doctor/tanstack-table-no-unstable-data-or-columns",
+    id: "tanstack-table-no-unstable-data-or-columns",
+    source: "react-doctor",
+    originallyExternal: false,
+    rule: {
+      ...tanstackTableNoUnstableDataOrColumns,
+      framework: "global",
+      category: "Bugs",
+    },
+  },
+  {
+    key: "react-doctor/tanstack-virtual-measure-element-requires-data-index",
+    id: "tanstack-virtual-measure-element-requires-data-index",
+    source: "react-doctor",
+    originallyExternal: false,
+    rule: {
+      ...tanstackVirtualMeasureElementRequiresDataIndex,
+      framework: "global",
       category: "Bugs",
     },
   },

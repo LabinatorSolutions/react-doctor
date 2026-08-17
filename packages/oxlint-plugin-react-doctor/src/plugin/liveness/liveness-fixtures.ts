@@ -2382,8 +2382,50 @@ export const livenessFixtures: Readonly<Record<string, LivenessFixture>> = {
   "no-ungated-tailwind-animation": {
     code: 'const Spinner = () => <span className="animate-spin" />;',
   },
+  "react-aria-dialog-requires-heading": {
+    code: 'import { Dialog } from "react-aria-components";\nconst Confirm = () => <Dialog><p>Are you sure?</p></Dialog>;',
+  },
+  "tanstack-form-on-submit-requires-prevent-default": {
+    code: 'import { useForm } from "@tanstack/react-form";\nconst View = () => { const form = useForm({ defaultValues: {} }); return <form onSubmit={form.handleSubmit} />; };',
+  },
+  "tanstack-table-no-unstable-data-or-columns": {
+    code: 'import { useReactTable } from "@tanstack/react-table";\nconst Table = () => { useReactTable({ data: [], columns: [] }); return null; };',
+  },
+  "tanstack-virtual-measure-element-requires-data-index": {
+    code: 'import { useVirtualizer } from "@tanstack/react-virtual";\nconst Row = ({ parentRef }) => { const virtualizer = useVirtualizer({ count: 1, getScrollElement: () => parentRef.current, estimateSize: () => 40 }); return <div ref={virtualizer.measureElement}>Row</div>; };',
+  },
+  "radix-dialog-content-requires-title": {
+    code: 'import * as Dialog from "@radix-ui/react-dialog";\nconst Confirm = () => <Dialog.Content><p>Are you sure?</p></Dialog.Content>;',
+  },
+  "radix-tabs-trigger-requires-list": {
+    code: 'import * as Tabs from "@radix-ui/react-tabs";\nconst View = () => <Tabs.Root><Tabs.Trigger value="a" /></Tabs.Root>;',
+  },
+  "base-ui-dialog-popup-requires-title": {
+    code: 'import { Dialog } from "@base-ui/react/dialog";\nconst Confirm = () => <Dialog.Popup><p>Are you sure?</p></Dialog.Popup>;',
+  },
+  "base-ui-tabs-tab-requires-list": {
+    code: 'import { Tabs } from "@base-ui/react/tabs";\nconst View = () => <Tabs.Root><Tabs.Tab value="a" /></Tabs.Root>;',
+  },
+  "base-ui-field-requires-label": {
+    code: 'import { Field } from "@base-ui/react/field";\nconst View = () => <Field.Root><Field.Control /></Field.Root>;',
+  },
   "shadcn-tabs-trigger-requires-list": {
-    code: 'import { TabsTrigger } from "./tabs";\nconst Trigger = () => <TabsTrigger value="a" />;',
+    code: 'import { Tabs, TabsTrigger } from "./tabs";\nconst View = () => <Tabs><TabsTrigger value="a" /></Tabs>;',
+  },
+  "shadcn-command-item-state-variant-requires-value": {
+    code: 'import { CommandItem } from "cmdk";\nconst Item = () => <CommandItem className="data-[selected]:bg-accent" />;',
+  },
+  "shadcn-dialog-content-requires-title": {
+    code: 'import { DialogContent } from "./dialog";\nconst Confirm = () => <DialogContent><p>Are you sure?</p></DialogContent>;',
+  },
+  "shadcn-form-item-requires-label": {
+    code: 'import { FormControl, FormItem } from "./form";\nconst Field = () => <FormItem><FormControl><input /></FormControl></FormItem>;',
+  },
+  "shadcn-icon-button-requires-label": {
+    code: 'import { Button } from "./button";\nconst Remove = () => <Button size="icon"><TrashIcon /></Button>;',
+  },
+  "shadcn-input-group-no-raw-controls": {
+    code: 'import { InputGroup, InputGroupAddon } from "./input-group";\nconst Search = () => <InputGroup><input /><InputGroupAddon>Search</InputGroupAddon></InputGroup>;',
   },
   "data-table-requires-accessible-name": {
     code: "const Results = () => <table><tr><th>Name</th></tr></table>;",

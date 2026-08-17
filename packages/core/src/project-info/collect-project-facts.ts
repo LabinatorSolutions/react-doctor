@@ -34,6 +34,15 @@ import {
   parseThreeRelease,
 } from "./version.js";
 import { getTanStackQueryVersion } from "./get-tanstack-query-version.js";
+import { hasAnyDependency } from "./has-any-dependency.js";
+import { hasBaseUiDependency } from "./has-base-ui-dependency.js";
+import { hasRadixUiDependency } from "./has-radix-ui-dependency.js";
+import { detectShadcnUi } from "./detect-shadcn-ui.js";
+
+const REACT_ARIA_COMPONENT_PACKAGES = ["react-aria-components"];
+const TANSTACK_TABLE_PACKAGES = ["@tanstack/react-table"];
+const TANSTACK_VIRTUAL_PACKAGES = ["@tanstack/react-virtual"];
+const TANSTACK_FORM_PACKAGES = ["@tanstack/react-form"];
 import { getStyledComponentsVersion } from "./get-styled-components-version.js";
 import { hasI18nDependency } from "./has-i18n-dependency.js";
 
@@ -109,6 +118,13 @@ export interface WorkspaceFacts {
   styledComponentsVersion: string | null;
   // Any-of predicates over the scan root + every workspace manifest.
   hasI18nLibrary: boolean;
+  hasShadcnUi: boolean;
+  hasRadixUi: boolean;
+  hasBaseUi: boolean;
+  hasReactAriaComponents: boolean;
+  hasTanstackTable: boolean;
+  hasTanstackVirtual: boolean;
+  hasTanstackForm: boolean;
   hasReactNativeAwarePackage: boolean;
   hasReanimatedAwarePackage: boolean;
   hasSsrDependency: boolean;
@@ -393,6 +409,17 @@ const evaluateManifestFacts = (
     facts.styledComponentsVersion = styledComponentsVersion;
   }
   facts.hasI18nLibrary = facts.hasI18nLibrary || hasI18nDependency(packageJson);
+  facts.hasShadcnUi = facts.hasShadcnUi || detectShadcnUi(directory);
+  facts.hasRadixUi = facts.hasRadixUi || hasRadixUiDependency(packageJson);
+  facts.hasBaseUi = facts.hasBaseUi || hasBaseUiDependency(packageJson);
+  facts.hasReactAriaComponents =
+    facts.hasReactAriaComponents || hasAnyDependency(packageJson, REACT_ARIA_COMPONENT_PACKAGES);
+  facts.hasTanstackTable =
+    facts.hasTanstackTable || hasAnyDependency(packageJson, TANSTACK_TABLE_PACKAGES);
+  facts.hasTanstackVirtual =
+    facts.hasTanstackVirtual || hasAnyDependency(packageJson, TANSTACK_VIRTUAL_PACKAGES);
+  facts.hasTanstackForm =
+    facts.hasTanstackForm || hasAnyDependency(packageJson, TANSTACK_FORM_PACKAGES);
   for (const packageName of REACT_THREE_FIBER_DEPENDENCY_NAMES) {
     const dependencyDeclaration = getDependencyDeclaration({
       packageName,
@@ -517,6 +544,13 @@ export const collectWorkspaceFacts = (
     tanstackQueryVersion: null,
     styledComponentsVersion: null,
     hasI18nLibrary: false,
+    hasShadcnUi: false,
+    hasRadixUi: false,
+    hasBaseUi: false,
+    hasReactAriaComponents: false,
+    hasTanstackTable: false,
+    hasTanstackVirtual: false,
+    hasTanstackForm: false,
     hasReactNativeAwarePackage: false,
     hasReanimatedAwarePackage: false,
     hasSsrDependency: false,
